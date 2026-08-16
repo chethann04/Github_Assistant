@@ -164,21 +164,29 @@ export class RAGService {
       };
     }
 
-    // 2. Keyword re-ranking for hybrid relevance
+    // 2. Hybrid re-ranking: Keyword density + Filepath matching + Structure boost (Phase 15)
     const queryKeywords = query
       .toLowerCase()
       .replace(/[^a-z0-9_.-]/g, ' ')
       .split(/\s+/)
-      .filter((w) => w.length > 3);
+      .filter((w) => w.length > 2);
 
     const reranked = citations
       .map((cit) => {
         let boost = 0;
-        const lower = (cit.snippet + cit.filePath).toLowerCase();
+        const lowerSnippet = cit.snippet.toLowerCase();
+        const lowerPath = cit.filePath.toLowerCase();
+
+        // Keyword density boost
         for (const kw of queryKeywords) {
-          if (lower.includes(kw)) boost += 0.05;
+          if (lowerSnippet.includes(kw)) boost += 0.04;
+          if (lowerPath.includes(kw)) boost += 0.08; // Filepath match boost
         }
-        return { ...cit, score: Math.min(cit.score + boost, 1.0) };
+
+        // Structural definition boost (named functions / classes)
+        if (cit.name) boost += 0.05;
+
+        return { ...cit, score: Math.round(Math.min(cit.score + boost, 1.0) * 100) / 100 };
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
