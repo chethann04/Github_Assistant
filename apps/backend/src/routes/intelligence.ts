@@ -56,6 +56,22 @@ router.post('/:repoId/bugs', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/v1/intelligence/:repoId/security (enforces session ownership)
+router.post('/:repoId/security', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const repo = await prisma.repository.findFirst({
+      where: { id: req.params.repoId, sessionId },
+    });
+    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+
+    const findings = await IntelligenceService.scanSecurity(repo.id);
+    return res.json(findings);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/v1/intelligence/:repoId/commits (enforces session ownership)
 router.get('/:repoId/commits', async (req: Request, res: Response) => {
   try {

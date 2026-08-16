@@ -33,6 +33,33 @@ export interface BugIssue {
   suggestedPatch?: string;
 }
 
+export type SecuritySeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+export type SecurityCategory =
+  | 'HARDCODED_SECRETS'
+  | 'INSECURE_AUTH'
+  | 'INJECTION_RISK'
+  | 'XSS_RISK'
+  | 'INSECURE_DATABASE'
+  | 'SENSITIVE_DATA_EXPOSURE'
+  | 'INSECURE_LOGGING'
+  | 'DEPENDENCY_RISK'
+  | 'INSECURE_CONFIG'
+  | 'INPUT_VALIDATION';
+
+export interface SecurityFinding {
+  id: string;
+  severity: SecuritySeverity;
+  category: SecurityCategory;
+  cwe?: string;
+  confidence: 'CONFIRMED' | 'LIKELY' | 'POTENTIAL';
+  title: string;
+  filePath: string;
+  lineRange: string;
+  evidence: string;
+  explanation: string;
+  suggestedRemediation: string;
+}
+
 export interface CommitSummary {
   sha: string;
   message: string;
@@ -774,5 +801,163 @@ Time/space complexity and tricky edge cases (e.g. null inputs, concurrency).`;
     if (aiResult) return aiResult;
 
     return `### Code Explanation: \`${filePath}\`\n\n- **File**: \`${filePath}\`\n- **Length**: ${snippet.split('\n').length} lines\n\n*Configure \`GEMINI_API_KEY\` for AI-powered structured code explanation.*`;
+  }
+
+  /**
+   * Dedicated Security Vulnerability & OWASP Audit
+   */
+  public static async scanSecurity(repoId: string): Promise<SecurityFinding[]> {
+    const overallStart = Date.now();
+    const repo = await prisma.repository.findUnique({ where: { id: repoId } });
+    if (!repo) throw new Error('Repository not found');
+
+    const commitSha = repo.latestCommit || repo.defaultBranch || 'HEAD';
+    const cached = AnalysisCacheService.get<SecurityFinding[]>(repoId, commitSha, 'SECURITY' as any);
+    if (cached) {
+      this.logInstrumentation({
+        repoSize: 'CACHED',
+        analysisType: 'SECURITY',
+        candidateChunks: 0,
+        selectedChunks: 0,
+        retrievalTimeSec: '0.00',
+        promptTimeSec: '0.00',
+        tokenEstimate: 0,
+        llmCalls: 0,
+        llmTimeSec: '0.00',
+        totalTimeSec: ((Date.now() - overallStart) / 1000).toFixed(2),
+        cacheHit: true,
+      });
+      return cached;
+    }
+
+    const { citations, profile, totalCandidatesFetched, retrievalTimeMs } =
+      await AdaptiveRetrievalService.retrieveForAnalysis(repoId, 'BUGS');
+
+    const promptStart = Date.now();
+    const systemPrompt = `You are a Principal Application Security Architect and Penetration Tester. Analyze the provided repository code chunks for:
+- Hardcoded secrets, API keys, credentials, or private keys
+- Insecure authentication, session handling, and JWT weaknesses
+- Injection vulnerabilities (SQL injection, Command injection, Path Traversal, NoSQL injection)
+- Cross-Site Scripting (XSS) and client-side security risks
+- Insecure database queries and missing parameterization
+- Sensitive data exposure in logs or HTTP responses
+- Insecure logging of passwords or authorization tokens
+- Dependency and supply chain vulnerabilities
+- Insecure default configuration (e.g. wildcard CORS, missing Helmet, debug flags)
+- Missing or bypassable input validation and sanitization
+
+For each vulnerability found, return a JSON object with:
+- severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"
+- category: "HARDCODED_SECRETS" | "INSECURE_AUTH" | "INJECTION_RISK" | "XSS_RISK" | "INSECURE_DATABASE" | "SENSITIVE_DATA_EXPOSURE" | "INSECURE_LOGGING" | "DEPENDENCY_RISK" | "INSECURE_CONFIG" | "INPUT_VALIDATION"
+- cwe: string (e.g. "CWE-79", "CWE-89", "CWE-798", "CWE-312")
+- confidence: "CONFIRMED" | "LIKELY" | "POTENTIAL"
+- title: string (concise security title)
+- filePath: string (exact relative path from evidence)
+- lineRange: string (e.g. "Lines 20-35")
+- evidence: string (sanitized, masked snippet illustrating the flaw)
+- explanation: string (detailed explanation of the attack vector and security impact)
+- suggestedRemediation: string (actionable remediation steps and secure code pattern)
+
+CRITICAL SECURITY RULE:
+Never output real secrets or keys in full. If a secret is identified, mask it (e.g. "sk-****abcd").
+Every finding MUST be strictly grounded in the provided code evidence. Output strict JSON array only.`;
+
+    const focusedCitations = citations.slice(0, 6);
+    const userPrompt = `Perform a comprehensive Security & OWASP Audit for ${repo.owner}/${repo.name} (${profile.tier} repository):\n\n${focusedCitations
+      .map((c) => `File: ${c.filePath} (Lines ${c.startLine}-${c.endLine})\n\`\`\`\n${maskSecrets(c.snippet.slice(0, 600))}\n\`\`\``)
+      .join('\n\n')}`;
+
+    const promptTimeSec = ((Date.now() - promptStart) / 1000).toFixed(2);
+    const tokenEstimate = Math.ceil((systemPrompt.length + userPrompt.length) / 3.5);
+
+    const llmStart = Date.now();
+    let securityResult: SecurityFinding[] = [];
+
+    const validSeverities: SecuritySeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+    const validCategories: SecurityCategory[] = [
+      'HARDCODED_SECRETS',
+      'INSECURE_AUTH',
+      'INJECTION_RISK',
+      'XSS_RISK',
+      'INSECURE_DATABASE',
+      'SENSITIVE_DATA_EXPOSURE',
+      'INSECURE_LOGGING',
+      'DEPENDENCY_RISK',
+      'INSECURE_CONFIG',
+      'INPUT_VALIDATION',
+    ];
+
+    try {
+      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 1800);
+      const jsonMatch = aiResult?.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          securityResult = parsed.map((sec: any, idx: number) => {
+            const rawCat = (sec.category || 'INSECURE_CONFIG').toUpperCase();
+            const category = validCategories.includes(rawCat) ? rawCat : 'INSECURE_CONFIG';
+            const rawSev = (sec.severity || 'MEDIUM').toUpperCase();
+            const severity = validSeverities.includes(rawSev) ? rawSev : 'MEDIUM';
+
+            return {
+              id: `sec-${idx + 1}`,
+              severity,
+              category,
+              cwe: sec.cwe || 'CWE-699',
+              confidence: ['CONFIRMED', 'LIKELY', 'POTENTIAL'].includes(sec.confidence) ? sec.confidence : 'LIKELY',
+              title: sec.title || 'Security Finding',
+              filePath: sec.filePath || citations[0]?.filePath || 'src/index.ts',
+              lineRange: sec.lineRange || 'N/A',
+              evidence: maskSecrets(sec.evidence || 'Evidence masked'),
+              explanation: sec.explanation || 'May expose application or data to unauthorized access.',
+              suggestedRemediation: sec.suggestedRemediation || 'Follow OWASP defensive security guidelines.',
+            };
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[IntelligenceService] Security audit AI error:', err.message);
+    }
+
+    const llmTimeSec = ((Date.now() - llmStart) / 1000).toFixed(2);
+
+    // Deterministic secret scanner fallback if LLM returns empty
+    if (securityResult.length === 0) {
+      citations.forEach((cit, idx) => {
+        if (/([a-zA-Z0-9_-]{20,})/.test(cit.snippet) && /(key|token|secret|password|bearer)/i.test(cit.snippet)) {
+          securityResult.push({
+            id: `sec-${idx + 1}`,
+            severity: 'HIGH',
+            category: 'HARDCODED_SECRETS',
+            cwe: 'CWE-798',
+            confidence: 'LIKELY',
+            title: `Potential hardcoded credential in ${cit.filePath.split('/').pop()}`,
+            filePath: cit.filePath,
+            lineRange: `Lines ${cit.startLine}–${cit.endLine}`,
+            evidence: maskSecrets(cit.snippet.slice(0, 150)),
+            explanation: 'Hardcoded secrets embedded in source control risk unauthorized access and credential compromise.',
+            suggestedRemediation: 'Extract credentials to environment variables or an external secret vault.',
+          });
+        }
+      });
+    }
+
+    AnalysisCacheService.set(repoId, commitSha, 'SECURITY' as any, securityResult);
+
+    this.logInstrumentation({
+      repoSize: `${profile.tier} (${profile.totalChunks} chunks, ${profile.totalFiles} files)`,
+      analysisType: 'SECURITY',
+      candidateChunks: totalCandidatesFetched,
+      selectedChunks: citations.length,
+      retrievalTimeSec: (retrievalTimeMs / 1000).toFixed(2),
+      promptTimeSec,
+      tokenEstimate,
+      llmCalls: 1,
+      llmTimeSec,
+      totalTimeSec: ((Date.now() - overallStart) / 1000).toFixed(2),
+      cacheHit: false,
+    });
+
+    return securityResult;
   }
 }

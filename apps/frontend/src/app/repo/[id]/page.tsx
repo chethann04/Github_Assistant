@@ -31,10 +31,12 @@ import CodeSearchTab from "@/components/CodeSearchTab";
 import ArchitectureTab from "@/components/ArchitectureTab";
 import DocGeneratorTab from "@/components/DocGeneratorTab";
 import BugDetectorTab from "@/components/BugDetectorTab";
+import SecurityTab from "@/components/SecurityTab";
 import CommitAnalysisTab from "@/components/CommitAnalysisTab";
 import ImpactAnalysisTab from "@/components/ImpactAnalysisTab";
 import HealthScoreTab from "@/components/HealthScoreTab";
 import CitationDrawer, { CitationData } from "@/components/CitationDrawer";
+import { ShieldCheck, Lock } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
@@ -43,6 +45,7 @@ type TabType =
   | "architecture"
   | "docs"
   | "bugs"
+  | "security"
   | "impact"
   | "health"
   | "search"
@@ -154,7 +157,8 @@ export default function RepoWorkspace() {
   const aiAnalysisTabs: Array<{ id: TabType; label: string; icon: any }> = [
     { id: "architecture", label: "Architecture", icon: Cpu },
     { id: "docs", label: "Auto Docs", icon: FileText },
-    { id: "bugs", label: "Bug Review", icon: ShieldAlert },
+    { id: "bugs", label: "Code Review", icon: ShieldAlert },
+    { id: "security", label: "Security Audit", icon: Lock },
     { id: "impact", label: "Impact Analysis", icon: GitPullRequest },
   ];
 
@@ -403,6 +407,8 @@ export default function RepoWorkspace() {
           {activeTab === "docs" && <DocGeneratorTab repositoryId={repo.id} />}
 
           {activeTab === "bugs" && <BugDetectorTab repositoryId={repo.id} />}
+
+          {activeTab === "security" && <SecurityTab repositoryId={repo.id} />}
 
           {activeTab === "impact" && <ImpactAnalysisTab repositoryId={repo.id} files={files} />}
 
