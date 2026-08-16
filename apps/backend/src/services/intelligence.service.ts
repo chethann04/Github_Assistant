@@ -7,13 +7,27 @@ import { AdaptiveRetrievalService } from './adaptive-retrieval.service.js';
 import { AnalysisCacheService } from './analysis-cache.service.js';
 import prisma from '../config/prisma.js';
 
+export type CodeReviewSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+export type CodeReviewCategory =
+  | 'BUG'
+  | 'BAD_PRACTICE'
+  | 'DUPLICATION'
+  | 'MAINTAINABILITY'
+  | 'PERFORMANCE'
+  | 'ERROR_HANDLING'
+  | 'ARCHITECTURE'
+  | 'RELIABILITY';
+
 export interface BugIssue {
   id: string;
-  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  severity: CodeReviewSeverity;
+  category: CodeReviewCategory;
   confidence: 'CONFIRMED' | 'LIKELY' | 'POTENTIAL';
   title: string;
   filePath: string;
   lineRange: string;
+  problem: string;
+  whyItMatters: string;
   description: string;
   suggestedFix: string;
   suggestedPatch?: string;
@@ -456,23 +470,33 @@ ${citations.map((c) => `- \`${c.filePath}\` (Lines ${c.startLine}-${c.endLine}):
       await AdaptiveRetrievalService.retrieveForAnalysis(repoId, 'BUGS');
 
     const promptStart = Date.now();
-    const systemPrompt = `You are a senior security and QA engineer. Analyze the provided code chunks for bugs, vulnerabilities, and code quality issues.
+    const systemPrompt = `You are a Principal Software Engineer and Code Reviewer. Analyze the provided repository code chunks for:
+- Bugs & reliability defects
+- Bad practices & anti-patterns
+- Code duplication
+- Maintainability problems
+- Performance bottlenecks
+- Error handling deficiencies
+- Architecture/coupling issues
 
-For each issue found, return JSON with:
-- severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
+For each finding, return a JSON object with:
+- severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"
+- category: "BUG" | "BAD_PRACTICE" | "DUPLICATION" | "MAINTAINABILITY" | "PERFORMANCE" | "ERROR_HANDLING" | "ARCHITECTURE" | "RELIABILITY"
 - confidence: "CONFIRMED" | "LIKELY" | "POTENTIAL"
-- title: string
-- filePath: string
+- title: string (concise title)
+- filePath: string (exact relative path from evidence)
 - lineRange: string (e.g. "Lines 20-35")
-- description: string
-- suggestedFix: string
-- suggestedPatch: string (unified diff format showing "- old_line\\n+ new_line")
+- problem: string (concrete description of the issue)
+- whyItMatters: string (technical explanation of impact/consequences)
+- description: string (summary)
+- suggestedFix: string (actionable remediation steps)
+- suggestedPatch: string (optional unified diff format "- old\\n+ new")
 
-Output strict JSON array only.`;
+Every finding MUST be strictly grounded in the provided code evidence. Do not invent files or line numbers. Output strict JSON array only.`;
 
-    const focusedCitations = citations.slice(0, 5);
-    const userPrompt = `Analyze this code from ${repo.owner}/${repo.name} (${profile.tier} repository) for top 3-5 potential bugs or security issues:\n\n${focusedCitations
-      .map((c) => `File: ${c.filePath} (Lines ${c.startLine}-${c.endLine})\n\`\`\`\n${maskSecrets(c.snippet.slice(0, 500))}\n\`\`\``)
+    const focusedCitations = citations.slice(0, 6);
+    const userPrompt = `Perform a comprehensive Code Review for ${repo.owner}/${repo.name} (${profile.tier} repository):\n\n${focusedCitations
+      .map((c) => `File: ${c.filePath} (Lines ${c.startLine}-${c.endLine})\n\`\`\`\n${maskSecrets(c.snippet.slice(0, 600))}\n\`\`\``)
       .join('\n\n')}`;
 
     const promptTimeSec = ((Date.now() - promptStart) / 1000).toFixed(2);
@@ -481,27 +505,49 @@ Output strict JSON array only.`;
     const llmStart = Date.now();
     let bugsResult: BugIssue[] = [];
 
+    const validSeverities: CodeReviewSeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+    const validCategories: CodeReviewCategory[] = [
+      'BUG',
+      'BAD_PRACTICE',
+      'DUPLICATION',
+      'MAINTAINABILITY',
+      'PERFORMANCE',
+      'ERROR_HANDLING',
+      'ARCHITECTURE',
+      'RELIABILITY',
+    ];
+
     try {
-      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 1200);
+      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 1800);
       const jsonMatch = aiResult?.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          bugsResult = parsed.map((bug: any, idx: number) => ({
-            id: `bug-${idx + 1}`,
-            severity: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(bug.severity) ? bug.severity : 'LOW',
-            confidence: ['CONFIRMED', 'LIKELY', 'POTENTIAL'].includes(bug.confidence) ? bug.confidence : 'POTENTIAL',
-            title: bug.title || 'Unknown Issue',
-            filePath: bug.filePath || citations[0]?.filePath || 'unknown',
-            lineRange: bug.lineRange || 'N/A',
-            description: bug.description || '',
-            suggestedFix: bug.suggestedFix || '',
-            suggestedPatch: bug.suggestedPatch || undefined,
-          }));
+          bugsResult = parsed.map((bug: any, idx: number) => {
+            const rawCat = (bug.category || 'BUG').toUpperCase();
+            const category = validCategories.includes(rawCat) ? rawCat : 'BUG';
+            const rawSev = (bug.severity || 'MEDIUM').toUpperCase();
+            const severity = validSeverities.includes(rawSev) ? rawSev : 'MEDIUM';
+
+            return {
+              id: `review-${idx + 1}`,
+              severity,
+              category,
+              confidence: ['CONFIRMED', 'LIKELY', 'POTENTIAL'].includes(bug.confidence) ? bug.confidence : 'LIKELY',
+              title: bug.title || 'Code Review Finding',
+              filePath: bug.filePath || citations[0]?.filePath || 'src/index.ts',
+              lineRange: bug.lineRange || 'N/A',
+              problem: bug.problem || bug.description || '',
+              whyItMatters: bug.whyItMatters || 'May impact maintainability or reliability.',
+              description: bug.description || bug.problem || '',
+              suggestedFix: bug.suggestedFix || 'Refactor according to best practices.',
+              suggestedPatch: bug.suggestedPatch || undefined,
+            };
+          });
         }
       }
     } catch (err: any) {
-      console.warn('[IntelligenceService] Bug detection AI error:', err.message);
+      console.warn('[IntelligenceService] Code review AI error:', err.message);
     }
 
     const llmTimeSec = ((Date.now() - llmStart) / 1000).toFixed(2);
@@ -511,14 +557,17 @@ Output strict JSON array only.`;
       citations.forEach((cit, idx) => {
         if (/await\s+[^;]+\s*;(?!\s*catch)/.test(cit.snippet) && !cit.snippet.includes('try')) {
           bugsResult.push({
-            id: `bug-${idx + 1}`,
+            id: `review-${idx + 1}`,
             severity: 'MEDIUM',
+            category: 'ERROR_HANDLING',
             confidence: 'LIKELY',
-            title: `Unhandled async promise in ${cit.filePath.split('/').pop()}`,
+            title: `Unhandled async operation in ${cit.filePath.split('/').pop()}`,
             filePath: cit.filePath,
-            lineRange: `Lines ${cit.startLine}-${cit.endLine}`,
-            description: 'Async operations without try/catch may lead to unhandled promise rejections.',
-            suggestedFix: 'Wrap async operations in a try/catch block with error logging.',
+            lineRange: `Lines ${cit.startLine}–${cit.endLine}`,
+            problem: 'Asynchronous Promise executed without explicit try/catch handler.',
+            whyItMatters: 'Unhandled rejections can crash the Node.js process or lead to silent failures.',
+            description: 'Async operations without error boundaries may lead to unhandled promise rejections.',
+            suggestedFix: 'Wrap async operations in a try/catch block with structured logging.',
             suggestedPatch: `@@ -${cit.startLine},3 +${cit.startLine},7 @@\n- const res = await fetchData();\n+ try {\n+   const res = await fetchData();\n+ } catch (err) {\n+   console.error("Operation failed:", err);\n+ }`,
           });
         }
