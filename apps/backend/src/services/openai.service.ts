@@ -167,7 +167,7 @@ export class OpenAIService {
     const modelsToTry = [config.openaiModel]; // Stick to primary configured model
     const maxRetries = 2; // Bounded: 1 attempt + 1 retry max
     const overallStartTime = Date.now();
-    const maxBudgetMs = 28000; // 28s total budget ceiling
+    const maxBudgetMs = 75000; // 75s total budget ceiling for reliable inference
 
     let lastError: any = null;
 

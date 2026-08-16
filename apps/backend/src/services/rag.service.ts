@@ -455,12 +455,7 @@ ${contextText || 'No relevant code chunks were found for this query in the repos
 If the code does not provide the answer, state that clearly without guessing.
 Always reference the relevant file names in your explanation.`;
 
-    const userMessage = `Code Context:
-${contextText}
-
-Question:
-${query}`;
-
+    const userMessage = `Code Context:\n${contextText}\n\nQuestion:\n${query}`;
     const answer = await LLMService.generate(systemPrompt, userMessage, provider);
     return {
       answer,
