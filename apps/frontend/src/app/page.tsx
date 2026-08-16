@@ -187,13 +187,13 @@ export default function Home() {
       {/* Main Content Area */}
       <main className="w-full max-w-[1550px] z-10 text-center py-4 flex flex-col items-center">
         {/* Pre-title Badge */}
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#E8F7F2] text-xs font-semibold text-[#008F75] mb-5 border border-[#D9E5E1] shadow-2xs">
-          <Sparkles className="w-3.5 h-3.5 text-[#008F75]" />
+        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#E8F7F2] text-xs sm:text-sm font-semibold text-[#008F75] mb-6 border border-[#D9E5E1] shadow-2xs">
+          <Sparkles className="w-4 h-4 text-[#008F75]" />
           <span>GITHUB CODEBASE AI ASSISTANT</span>
         </div>
 
         {/* Hero Headline */}
-        <h1 className="text-3xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-5 leading-[1.05] text-[#0F172A]">
+        <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight mb-7 leading-[1.04] text-[#0F172A]">
           Understand any public <br className="hidden sm:inline" />
           <span className="text-[#008F75]">
             GitHub codebase with AI
