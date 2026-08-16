@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { IntelligenceService } from '../services/intelligence.service.js';
+import { DependencyGraphService } from '../services/dependency-graph.service.js';
 import prisma from '../config/prisma.js';
 
 const router = Router();
@@ -144,6 +145,43 @@ router.get('/:repoId/health', async (req: Request, res: Response) => {
 
     const health = await IntelligenceService.calculateHealthScore(repo.id);
     return res.json(health);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/intelligence/:repoId/dependency-graph (enforces session ownership)
+router.get('/:repoId/dependency-graph', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const repo = await prisma.repository.findFirst({
+      where: { id: req.params.repoId, sessionId },
+    });
+    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+
+    const graph = await DependencyGraphService.buildGraph(repo.id);
+    return res.json(graph);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/v1/intelligence/:repoId/dependency-details (enforces session ownership)
+router.post('/:repoId/dependency-details', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const repo = await prisma.repository.findFirst({
+      where: { id: req.params.repoId, sessionId },
+    });
+    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+
+    const { filePath } = req.body;
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'filePath is required' });
+    }
+
+    const details = await DependencyGraphService.getFileDetails(repo.id, filePath);
+    return res.json(details);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

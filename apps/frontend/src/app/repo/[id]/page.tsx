@@ -32,17 +32,19 @@ import ArchitectureTab from "@/components/ArchitectureTab";
 import DocGeneratorTab from "@/components/DocGeneratorTab";
 import BugDetectorTab from "@/components/BugDetectorTab";
 import SecurityTab from "@/components/SecurityTab";
+import DependencyGraphTab from "@/components/DependencyGraphTab";
 import CommitAnalysisTab from "@/components/CommitAnalysisTab";
 import ImpactAnalysisTab from "@/components/ImpactAnalysisTab";
 import HealthScoreTab from "@/components/HealthScoreTab";
 import CitationDrawer, { CitationData } from "@/components/CitationDrawer";
-import { ShieldCheck, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
 type TabType =
   | "chat"
   | "architecture"
+  | "deps"
   | "docs"
   | "bugs"
   | "security"
@@ -156,6 +158,7 @@ export default function RepoWorkspace() {
   // Primary AI Analysis Navigation Group
   const aiAnalysisTabs: Array<{ id: TabType; label: string; icon: any }> = [
     { id: "architecture", label: "Architecture", icon: Cpu },
+    { id: "deps", label: "Dependency Graph", icon: GitBranch },
     { id: "docs", label: "Auto Docs", icon: FileText },
     { id: "bugs", label: "Code Review", icon: ShieldAlert },
     { id: "security", label: "Security Audit", icon: Lock },
@@ -403,6 +406,8 @@ export default function RepoWorkspace() {
           )}
 
           {activeTab === "architecture" && <ArchitectureTab repositoryId={repo.id} />}
+
+          {activeTab === "deps" && <DependencyGraphTab repositoryId={repo.id} />}
 
           {activeTab === "docs" && <DocGeneratorTab repositoryId={repo.id} />}
 
