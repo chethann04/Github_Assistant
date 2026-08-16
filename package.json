@@ -1,0 +1,31 @@
+{
+  "name": "github-knowledge-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm --prefix apps/backend run dev",
+    "dev:frontend": "npm --prefix apps/frontend run dev",
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"cyan.bold,green.bold\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:backend": "npm --prefix apps/backend run build",
+    "build:frontend": "npm --prefix apps/frontend run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "db:generate": "npm --prefix apps/backend run db:generate",
+    "db:validate": "npm --prefix apps/backend run db:validate",
+    "db:push": "npm --prefix apps/backend run db:push",
+    "db:status": "npm --prefix apps/backend run db:status",
+    "db:studio": "npm --prefix apps/backend run db:studio"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "prisma": "^5.18.0",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@google/genai": "^2.16.0",
+    "@types/pg": "^8.21.0",
+    "pg": "^8.23.0"
+  }
+}

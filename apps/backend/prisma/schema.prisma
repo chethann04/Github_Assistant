@@ -1,0 +1,102 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AnonymousSession {
+  id           String        @id @default(uuid())
+  createdAt    DateTime      @default(now())
+  lastSeenAt   DateTime      @updatedAt
+  repositories Repository[]
+  indexJobs    IndexJob[]
+  chatSessions ChatSession[]
+}
+
+model Repository {
+  id            String           @id @default(uuid())
+  sessionId     String
+  session       AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  url           String
+  owner         String
+  name          String
+  description   String?
+  defaultBranch String           @default("main")
+  latestCommit  String?
+  language      String?
+  stars         Int              @default(0)
+  forks         Int              @default(0)
+  topics        String[]         @default([])
+  visibility    String           @default("public")
+  status        String           @default("PENDING")
+  complexityScore  Int?
+  complexityLevel  String?
+  complexityData   Json?
+  indexedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  indexJobs        IndexJob[]
+  chatSessions     ChatSession[]
+
+  @@unique([sessionId, url])
+  @@index([sessionId])
+  @@index([owner, name])
+}
+
+model IndexJob {
+  id           String           @id @default(uuid())
+  sessionId    String
+  session      AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  repositoryId String
+  repository   Repository       @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  status       String           @default("PENDING")
+  progress     Int              @default(0)
+  currentStep  String?
+  errorMessage String?
+  totalFiles   Int              @default(0)
+  totalChunks  Int              @default(0)
+  commitSha    String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([sessionId])
+  @@index([repositoryId])
+}
+
+model ChatSession {
+  id           String           @id @default(uuid())
+  sessionId    String
+  session      AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  repositoryId String
+  repository   Repository       @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  title        String           @default("New Chat")
+  mode         String           @default("repo")
+  selectedFile String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  messages     Message[]
+
+  @@index([sessionId])
+  @@index([repositoryId])
+}
+
+model Message {
+  id            String      @id @default(uuid())
+  chatSessionId String
+  chatSession   ChatSession @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  role          String
+  content       String
+  citations     String?
+  metadata      String?
+  createdAt     DateTime    @default(now())
+
+  @@index([chatSessionId])
+}
+
+
