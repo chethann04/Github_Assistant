@@ -66,13 +66,16 @@ export class RAGService {
 
     const categories: QueryCategory[] = [];
 
-    if (/what is this project (about|for)|explain this (project|repo|repository)|overview of (this|the) (project|repo)|project summary|purpose of this/i.test(q)) categories.push('REPO_OVERVIEW');
-    if (/how does (this|the) (project|repo|codebase|system) work|how (does|do) it work|execution flow|lifecycle|step by step|request flow/i.test(q)) categories.push('REPO_EXECUTION_FLOW');
-    if (/architecture|system design|folder structure|how is (this|it) structured|design pattern|scalability/i.test(q)) categories.push('REPO_ARCHITECTURE');
-    if (/auth|login|signin|signup|jwt|session|password|protect|guard|passport|user session/i.test(q)) categories.push('REPO_AUTH');
+    if (/understand project|what is this project (about|for)|explain this (project|repo|repository)|overview of (this|the) (project|repo)|project summary|purpose of this/i.test(q)) categories.push('REPO_OVERVIEW');
+    if (/explain data flow|how does (this|the) (project|repo|codebase|system) work|how (does|do) it work|execution flow|data flow|lifecycle|step by step|request flow/i.test(q)) categories.push('REPO_EXECUTION_FLOW');
+    if (/explain architecture|architecture|system design|folder structure|how is (this|it) structured|design pattern|scalability/i.test(q)) categories.push('REPO_ARCHITECTURE');
+    if (/explain authentication|auth|login|signin|signup|jwt|session|password|protect|guard|passport|user session/i.test(q)) categories.push('REPO_AUTH');
     if (/api\s*key|env|secret|token|credential|configuration|constants|variable|settings/i.test(q)) categories.push('REPO_CONFIG_KEYS');
-    if (/database|schema|prisma|model|sql|table|migration|entities|orm|store|supabase|postgres|sqlite/i.test(q)) categories.push('REPO_DATABASE');
-    if (/api endpoint|routes|rest api|http methods|handlers|controllers list|paths|backend|server/i.test(q)) categories.push('REPO_ENDPOINTS');
+    if (/explain database|database|schema|prisma|model|sql|table|migration|entities|orm|store|supabase|postgres|sqlite/i.test(q)) categories.push('REPO_DATABASE');
+    if (/explain api flow|api endpoint|routes|rest api|http methods|handlers|controllers list|paths|backend|server/i.test(q)) categories.push('REPO_ENDPOINTS');
+    if (/explain main features|main features|core capabilities|key features|what can this do/i.test(q)) categories.push('REPO_OVERVIEW');
+    if (/find entry point|entry point|main entry|bootstrap|index file|server start|root file/i.test(q)) categories.push('REPO_EXECUTION_FLOW');
+    if (/find important files|important files|key files|critical files|core files/i.test(q)) categories.push('REPO_ARCHITECTURE');
     if (/bug|issue|vulnerability|error|problem|edge\s*case|improve|refactor|quality|fail|security review/i.test(q)) categories.push('REPO_BUGS_REVIEW');
     if (/frontend|react|component|ui|pages|views|hooks|props|css|tailwind|state management/i.test(q)) categories.push('REPO_FRONTEND');
     if (/dependencies|package|libraries|framework|tech stack|npm packages/i.test(q)) categories.push('REPO_DEPENDENCIES');

@@ -86,7 +86,17 @@ const MODES: Array<{ id: ChatMode; label: string; icon: any; description: string
 ];
 
 const MODE_PROMPTS: Record<ChatMode, string[]> = {
-  repo:         ["Explain the high-level architecture", "Where are the main API endpoints?", "How is state managed?", "What are the key dependencies?"],
+  repo: [
+    "Understand Project",
+    "Explain Architecture",
+    "Explain Data Flow",
+    "Explain Authentication",
+    "Explain Database",
+    "Explain API Flow",
+    "Explain Main Features",
+    "Find Entry Point",
+    "Find Important Files",
+  ],
   file: [
     "Explain this file",
     "Summarize this file",
@@ -774,15 +784,19 @@ export default function ChatInterface({
         {/* Quick Prompts */}
         {initialMessages && (
           <div className="px-5 pb-2 shrink-0">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="text-[11px] font-semibold text-slate-500 mb-2 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#008F75]" />
+              <span>Suggested Codebase Actions:</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {MODE_PROMPTS[mode].map((prompt, idx) => (
                 <button
                   key={idx}
                   onClick={() => handleSendMessage(prompt)}
-                  className="text-left text-xs p-3 rounded-2xl bg-white/80 backdrop-blur-md hover:bg-emerald-50/80 border border-slate-200 hover:border-emerald-300 text-slate-700 hover:text-emerald-950 transition-all flex items-center justify-between group shadow-sm hover:shadow-md"
+                  className="text-left text-xs p-2.5 rounded-xl bg-white/90 backdrop-blur-md hover:bg-[#E8F7F2] border border-slate-200 hover:border-[#008F75] text-slate-700 hover:text-[#008F75] transition-all flex items-center justify-between group shadow-2xs cursor-pointer"
                 >
-                  <span>{prompt}</span>
-                  <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all text-emerald-600" />
+                  <span className="font-medium truncate">{prompt}</span>
+                  <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all text-[#008F75] shrink-0 ml-1" />
                 </button>
               ))}
             </div>
