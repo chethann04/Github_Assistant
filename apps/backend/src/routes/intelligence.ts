@@ -208,4 +208,53 @@ router.post('/:repoId/generate-tests', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/v1/intelligence/compare — compare two repositories side-by-side
+router.post('/compare', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const { repoId1, repoId2 } = req.body;
+
+    if (!repoId1 || !repoId2) {
+      return res.status(400).json({ error: 'repoId1 and repoId2 are required' });
+    }
+
+    const [repo1, repo2] = await Promise.all([
+      prisma.repository.findFirst({ where: { id: repoId1, sessionId } }),
+      prisma.repository.findFirst({ where: { id: repoId2, sessionId } }),
+    ]);
+
+    if (!repo1 || !repo2) {
+      return res.status(404).json({ error: 'One or both repositories not found' });
+    }
+
+    const [health1, health2] = await Promise.all([
+      IntelligenceService.calculateHealthScore(repo1.id),
+      IntelligenceService.calculateHealthScore(repo2.id),
+    ]);
+
+    return res.json({
+      repo1: {
+        id: repo1.id,
+        name: repo1.name,
+        owner: repo1.owner,
+        language: repo1.language,
+        stars: repo1.stars,
+        forks: repo1.forks,
+        health: health1,
+      },
+      repo2: {
+        id: repo2.id,
+        name: repo2.name,
+        owner: repo2.owner,
+        language: repo2.language,
+        stars: repo2.stars,
+        forks: repo2.forks,
+        health: health2,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
