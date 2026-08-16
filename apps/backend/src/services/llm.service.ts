@@ -24,26 +24,18 @@ export class LLMService {
     openaiModel: string;
     geminiModel: string;
   } {
-    const hasGemini = GeminiService.isConfigured();
     const hasOpenAI = OpenAIService.isConfigured();
+    const hasGemini = GeminiService.isConfigured();
 
-    let activeDefault: LLMProviderType = 'gemini';
-    if (config.isNvidiaProvider || config.llmProvider === 'nvidia' || config.llmProvider === 'openai') {
-      activeDefault = 'nvidia';
-    } else if (hasGemini && hasOpenAI) {
-      activeDefault = 'dual';
-    } else if (hasOpenAI && !hasGemini) {
-      activeDefault = 'openai';
-    } else if (hasGemini) {
-      activeDefault = 'gemini';
-    }
+    // Primary & default LLM is GLM-5.2 via NVIDIA NIM
+    const activeDefault: LLMProviderType = 'openai';
 
     return {
-      gemini: hasGemini,
+      gemini: false,
       openai: hasOpenAI,
       activeDefault,
-      isNvidia: config.isNvidiaProvider,
-      openaiModel: config.openaiModel,
+      isNvidia: true,
+      openaiModel: config.openaiModel || 'z-ai/glm-5.2',
       geminiModel: config.geminiModel,
     };
   }
