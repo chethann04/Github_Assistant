@@ -1,13 +1,36 @@
 "use client";
 
 import { useState } from "react";
-import { Search, FileCode, Sparkles, Loader2, ArrowRight } from "lucide-react";
+import {
+  Search,
+  FileCode,
+  Sparkles,
+  Loader2,
+  ArrowRight,
+  Filter,
+  Check,
+  Copy,
+  ExternalLink,
+  Code2,
+  Compass,
+} from "lucide-react";
 import axios from "axios";
 import CitationDrawer, { CitationData } from "./CitationDrawer";
 
 interface CodeSearchTabProps {
   repositoryId: string;
 }
+
+const PREDEFINED_CONCEPTS = [
+  "Authentication & Session Middleware",
+  "Vector Embeddings & Chunking",
+  "Database Schema & Prisma Models",
+  "REST API Endpoints & Routing",
+  "Error Handling & Logging",
+  "AI Provider & LLM Service",
+  "Static Dependency Analysis",
+  "Git Commit & History Processing",
+];
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
@@ -16,18 +39,18 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
   const [results, setResults] = useState<CitationData[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<CitationData | null>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
+  const executeSearch = async (searchTerm: string) => {
+    if (!searchTerm.trim()) return;
 
     setLoading(true);
     try {
       const response = await axios.post(`${API_BASE}/chat/${repositoryId}/search`, {
-        query: query.trim(),
-        limit: 8,
+        query: searchTerm.trim(),
+        limit: 10,
       });
-      setResults(response.data);
+      setResults(response.data || []);
     } catch (err) {
       console.error("Semantic search failed:", err);
     } finally {
@@ -35,100 +58,170 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
     }
   };
 
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeSearch(query);
+  };
+
+  const handleCopySnippet = (snippet: string, idx: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(snippet);
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 2000);
+  };
+
   return (
-    <div className="w-full space-y-6">
-      {/* Search Header Form */}
+    <div className="w-full bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-sm relative text-slate-900 space-y-6">
+      {/* Header */}
+      <div className="pb-4 border-b border-slate-200">
+        <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 w-fit">
+          <Compass className="w-3.5 h-3.5 text-emerald-600" /> Semantic Feature Locator
+        </span>
+        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mt-2">
+          Find Implementation & Code Locator
+        </h2>
+        <p className="text-xs sm:text-sm text-slate-500 mt-1">
+          Search code semantically by concept, feature name, architectural responsibility, or logic flow.
+        </p>
+      </div>
+
+      {/* Search Input Bar */}
       <form onSubmit={handleSearch} className="w-full">
-        <div className="relative flex items-center glass-panel rounded-3xl p-2.5 shadow-xl shadow-emerald-950/5 border border-white/90 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-500 transition-all">
-          <Search className="w-5 h-5 text-emerald-700 ml-4 shrink-0" />
+        <div className="relative flex items-center bg-slate-50 rounded-2xl p-2 border border-slate-200 focus-within:ring-2 focus-within:ring-[#008F75]/30 focus-within:border-[#008F75] transition-all">
+          <Search className="w-4 h-4 text-slate-400 ml-3 shrink-0" />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search code semantically (e.g., 'auth middleware', 'database pooling', 'error handler')..."
-            className="w-full bg-transparent px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none text-sm font-normal"
+            placeholder="Describe any feature or concept (e.g. 'auth middleware', 'vector storage', 'health calculation')..."
+            className="w-full bg-transparent px-3 py-2.5 text-slate-900 placeholder-slate-400 focus:outline-none text-xs sm:text-sm font-normal"
           />
           <button
             type="submit"
             disabled={loading}
-            className="bg-slate-900 hover:bg-slate-800 active:bg-black text-white font-semibold px-6 py-3 rounded-2xl flex items-center gap-2 transition-all shrink-0 shadow-md border border-slate-800 group"
+            className="bg-slate-900 hover:bg-slate-800 text-white font-semibold px-5 py-2.5 rounded-xl flex items-center gap-2 transition-all shrink-0 text-xs shadow-xs cursor-pointer"
           >
             {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <>
-                <span>Search Code</span>
-                <Sparkles className="w-4 h-4 text-emerald-400 group-hover:rotate-12 transition-transform" />
+                <span>Find Locations</span>
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
               </>
             )}
           </button>
         </div>
       </form>
 
-      {/* Results List */}
-      {results.length > 0 ? (
-        <div className="space-y-4">
-          <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5 px-1">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Ranked Semantic Matches ({results.length}):
-          </span>
+      {/* Suggested Quick Concept Pills */}
+      <div>
+        <span className="text-[11px] font-semibold text-slate-500 block mb-2">
+          Quick Concept Searches:
+        </span>
+        <div className="flex flex-wrap gap-2">
+          {PREDEFINED_CONCEPTS.map((concept, idx) => (
+            <button
+              key={idx}
+              onClick={() => {
+                setQuery(concept);
+                executeSearch(concept);
+              }}
+              className="text-xs px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-[#E8F7F2] text-slate-700 hover:text-[#008F75] border border-slate-200 hover:border-[#008F75] transition-all font-medium flex items-center gap-1 cursor-pointer"
+            >
+              <span>{concept}</span>
+              <ArrowRight className="w-3 h-3 opacity-60" />
+            </button>
+          ))}
+        </div>
+      </div>
 
-          <div className="grid grid-cols-1 gap-4">
+      {/* Results Section */}
+      {loading ? (
+        <div className="py-20 flex flex-col items-center justify-center text-center text-slate-500 gap-3">
+          <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm font-medium">
+            Generating 2048D query embedding and searching ChromaDB collection...
+          </span>
+        </div>
+      ) : results.length > 0 ? (
+        <div className="space-y-4 pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-700 font-bold flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#008F75]" /> Ranked Implementation Locations ({results.length}):
+            </span>
+            <span className="text-xs text-slate-400">Click any card to inspect code in drawer</span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3.5">
             {results.map((item, idx) => (
               <div
                 key={idx}
                 onClick={() => setSelectedCitation(item)}
-                className="relative bg-white/55 backdrop-blur-2xl p-6 rounded-3xl border border-white/90 shadow-[0_8px_30px_rgb(0,0,0,0.04),inset_0_1px_1px_rgba(255,255,255,0.95)] hover:bg-white/80 hover:border-emerald-300 hover:shadow-[0_20px_40px_-12px_rgba(16,185,129,0.15)] hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex flex-col justify-between overflow-hidden"
+                className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:border-[#008F75] hover:bg-[#E8F7F2]/30 transition-all cursor-pointer group shadow-2xs space-y-3"
               >
-                <div className="absolute top-0 right-0 w-28 h-28 bg-gradient-to-bl from-white/60 to-transparent rounded-bl-3xl pointer-events-none" />
-
-                <div className="flex justify-between items-center mb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <div className="p-2 rounded-xl bg-emerald-50/80 text-emerald-700 border border-emerald-100 shadow-2xs">
-                      <FileCode className="w-4 h-4" />
-                    </div>
-                    <span className="font-mono text-sm font-bold text-slate-900 group-hover:text-emerald-800 transition-colors">
+                    <span className="w-6 h-6 rounded-lg bg-slate-900 text-white font-mono font-bold text-xs flex items-center justify-center">
+                      {idx + 1}
+                    </span>
+                    <FileCode className="w-4 h-4 text-[#008F75]" />
+                    <span className="font-mono text-xs font-bold text-slate-900 group-hover:text-[#008F75] transition-colors">
                       {item.filePath}
                     </span>
                   </div>
+
                   <div className="flex items-center gap-2">
-                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100/90 text-slate-800 border border-slate-200/90 font-mono font-medium">
-                      Lines {item.startLine}-{item.endLine}
+                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200 font-mono font-medium">
+                      Lines {item.startLine}–{item.endLine}
                     </span>
                     {item.score !== undefined && (
-                      <span className="text-xs px-3 py-0.5 rounded-full bg-emerald-50/90 text-emerald-800 border border-emerald-200/90 font-semibold shadow-2xs">
+                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold shadow-2xs">
                         {Math.round(item.score * 100)}% match
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-slate-50/90 backdrop-blur-md border border-slate-200/90 font-mono text-xs text-slate-800 max-h-36 overflow-hidden relative shadow-inner">
-                  <pre className="whitespace-pre-wrap">{item.snippet.slice(0, 300)}...</pre>
-                  <div className="absolute bottom-0 inset-x-0 h-10 bg-gradient-to-t from-slate-50/90 to-transparent pointer-events-none" />
-                </div>
-
-                <div className="flex justify-end mt-3">
-                  <span className="text-xs text-slate-900 group-hover:text-emerald-700 group-hover:translate-x-1 transition-all flex items-center gap-1 font-semibold">
-                    Inspect Full Chunk <ArrowRight className="w-3.5 h-3.5 text-emerald-600" />
-                  </span>
+                {/* Code Snippet Box */}
+                <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-900 text-slate-100 text-xs font-mono">
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-slate-950 border-b border-slate-800 text-[11px] text-slate-400">
+                    <span className="flex items-center gap-1 font-sans">
+                      <Code2 className="w-3 h-3 text-[#008F75]" /> Implementation Snippet
+                    </span>
+                    <button
+                      onClick={(e) => handleCopySnippet(item.snippet, idx, e)}
+                      className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-white px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 transition-colors"
+                    >
+                      {copiedIdx === idx ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" /> Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="p-3.5 overflow-x-auto whitespace-pre leading-relaxed text-slate-300 max-h-36">
+                    {item.snippet}
+                  </pre>
                 </div>
               </div>
             ))}
           </div>
         </div>
       ) : (
-        !loading && (
-          <div className="text-center py-16 bg-white/55 backdrop-blur-2xl rounded-3xl border border-white/90 shadow-[0_10px_30px_rgb(0,0,0,0.04),inset_0_1px_1px_rgba(255,255,255,0.95)]">
-            <Search className="w-10 h-10 text-emerald-700 mx-auto mb-2" />
-            <h4 className="text-base font-bold text-slate-900">Semantic Code Similarity</h4>
-            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-              Type natural language questions or concepts to retrieve the most relevant functions and classes instantly.
-            </p>
-          </div>
-        )
+        <div className="text-center py-16 text-slate-500">
+          <Search className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+          <h4 className="text-slate-800 font-semibold text-sm">Enter a search query or select a concept above</h4>
+          <p className="text-xs text-slate-500 mt-1">
+            Matches are scored by semantic distance in the 2048-dimensional vector space.
+          </p>
+        </div>
       )}
 
-      {/* Drawer */}
+      {/* Citation Drawer */}
       <CitationDrawer
         citation={selectedCitation}
         repositoryId={repositoryId}
