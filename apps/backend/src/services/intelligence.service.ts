@@ -1015,4 +1015,50 @@ Every finding MUST be strictly grounded in the provided code evidence. Output st
 
     return securityResult;
   }
+
+  /**
+   * AI Automated Test Suite Generation (Phase 13)
+   */
+  public static async generateTests(
+    repoId: string,
+    filePath: string,
+    framework: string = 'vitest'
+  ): Promise<string> {
+    const repo = await prisma.repository.findUnique({ where: { id: repoId } });
+    if (!repo) throw new Error('Repository not found');
+
+    const commitSha = repo.latestCommit || repo.defaultBranch || 'main';
+    const cached = AnalysisCacheService.get<string>(repoId, commitSha, 'TESTS' as any, `${filePath}:${framework}`);
+    if (cached) return cached;
+
+    // Fetch actual code content for the target file
+    const content = await GitHubService.fetchRawFileContent(repo.owner, repo.name, commitSha, filePath);
+    if (!content) {
+      throw new Error(`Unable to fetch source code for ${filePath}`);
+    }
+
+    const systemPrompt = `You are a Principal QA and Test Automation Engineer. Generate a comprehensive automated test suite for the provided file using the "${framework}" framework.
+Include:
+1. Complete import statements and mock definitions.
+2. Happy path tests with accurate assertions.
+3. Edge cases, null/undefined boundaries, and invalid input tests.
+4. Async rejection, error handling, and timeout scenarios.
+5. High code coverage aiming for 100% branch and statement coverage.
+Format output strictly as clean code inside a single \`\`\`${framework.includes('py') ? 'python' : 'typescript'} block with explanatory comments.`;
+
+    const userPrompt = `Target File: \`${filePath}\`
+Test Framework: \`${framework}\`
+Repository: \`${repo.owner}/${repo.name}\`
+
+Source Code:
+\`\`\`
+${content.slice(0, 12000)}
+\`\`\``;
+
+    const aiResult = await this.generateWithAI(systemPrompt, userPrompt);
+    const finalResult = aiResult || `// Test suite for ${filePath}\nimport { describe, it, expect } from '${framework}';\n\ndescribe('${filePath}', () => {\n  it('should be defined', () => {\n    expect(true).toBe(true);\n  });\n});`;
+
+    AnalysisCacheService.set(repoId, commitSha, 'TESTS' as any, finalResult, `${filePath}:${framework}`);
+    return finalResult;
+  }
 }

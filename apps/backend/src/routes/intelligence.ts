@@ -187,4 +187,25 @@ router.post('/:repoId/dependency-details', async (req: Request, res: Response) =
   }
 });
 
+// POST /api/v1/intelligence/:repoId/generate-tests (enforces session ownership)
+router.post('/:repoId/generate-tests', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const repo = await prisma.repository.findFirst({
+      where: { id: req.params.repoId, sessionId },
+    });
+    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+
+    const { filePath, framework = 'vitest' } = req.body;
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'filePath is required' });
+    }
+
+    const testSuite = await IntelligenceService.generateTests(repo.id, filePath, framework);
+    return res.json({ testSuite });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
