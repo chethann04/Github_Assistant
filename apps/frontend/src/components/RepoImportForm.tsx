@@ -56,7 +56,7 @@ export default function RepoImportForm({ onJobStarted }: RepoImportFormProps) {
   const hasUrl = Boolean(url.trim());
 
   return (
-    <div className="w-full max-w-2xl mx-auto">
+    <div className="w-full max-w-4xl mx-auto">
       <form onSubmit={handleSubmit} className="w-full">
         <div className="relative flex items-center bg-white rounded-2xl p-2 shadow-lg shadow-slate-900/5 border border-[#D9E5E1] focus-within:ring-2 focus-within:ring-[#008F75]/25 focus-within:border-[#008F75] transition-all">
           <Github className="w-5 h-5 text-[#008F75] ml-3.5 shrink-0" />

@@ -166,7 +166,7 @@ export default function RepoList({ onSelectRepo, refreshTrigger }: RepoListProps
   }
 
   return (
-    <div className="w-full max-w-5xl mx-auto my-8">
+    <div className="w-full my-8">
       <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
         <h3 className="text-base sm:text-lg font-bold text-[#0F172A] flex items-center gap-2">
           <FolderGit2 className="w-5 h-5 text-[#008F75]" />
@@ -206,7 +206,7 @@ export default function RepoList({ onSelectRepo, refreshTrigger }: RepoListProps
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {repos.map((repo) => {
           const latestJob = repo.indexJobs?.[0];
           const isReady = latestJob?.status === "COMPLETED";
