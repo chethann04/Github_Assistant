@@ -56,6 +56,7 @@ export default function RepoWorkspace() {
   const [repo, setRepo] = useState<any>(null);
   const [files, setFiles] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<TabType>("chat");
+  const [chatFocusFile, setChatFocusFile] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [selectedFileCitation, setSelectedFileCitation] = useState<CitationData | null>(null);
   const [loadingFilePath, setLoadingFilePath] = useState<string | null>(null);
@@ -105,6 +106,11 @@ export default function RepoWorkspace() {
     } finally {
       setLoadingFilePath(null);
     }
+  };
+
+  const handleAskAiAboutFile = (filePath: string) => {
+    setChatFocusFile(filePath);
+    setActiveTab("chat");
   };
 
   const handleDeleteRepo = async () => {
@@ -383,7 +389,13 @@ export default function RepoWorkspace() {
         {/* Workspace Tab View */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full max-w-[1650px] mx-auto">
           {activeTab === "chat" && (
-            <ChatInterface repositoryId={repo.id} repoName={`${repo.owner}/${repo.name}`} files={files} />
+            <ChatInterface
+              repositoryId={repo.id}
+              repoName={`${repo.owner}/${repo.name}`}
+              files={files}
+              initialSelectedFile={chatFocusFile}
+              initialMode={chatFocusFile ? "file" : "repo"}
+            />
           )}
 
           {activeTab === "architecture" && <ArchitectureTab repositoryId={repo.id} />}
@@ -402,9 +414,14 @@ export default function RepoWorkspace() {
 
           {activeTab === "files" && (
             <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
-                <FolderTree className="w-5 h-5 text-emerald-700" /> Indexed Repository Files ({files.length})
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <FolderTree className="w-5 h-5 text-emerald-700" /> Indexed Repository Files ({files.length})
+                </h3>
+                <span className="text-xs text-slate-500 font-medium">
+                  Select any file to inspect code or launch focused AI chat
+                </span>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[650px] overflow-y-auto pr-2">
                 {files.map((file, idx) => {
@@ -412,10 +429,13 @@ export default function RepoWorkspace() {
                   return (
                     <div
                       key={idx}
-                      onClick={() => handleOpenFile(file)}
-                      className="p-3.5 rounded-xl bg-slate-50 hover:bg-emerald-50/70 border border-slate-200 hover:border-emerald-300 transition-all flex items-center justify-between cursor-pointer group shadow-2xs"
+                      className="p-3.5 rounded-xl bg-slate-50 hover:bg-emerald-50/70 border border-slate-200 hover:border-emerald-300 transition-all flex items-center justify-between group shadow-2xs"
                     >
-                      <div className="flex items-center gap-2.5 overflow-hidden">
+                      <div
+                        onClick={() => handleOpenFile(file)}
+                        className="flex items-center gap-2.5 overflow-hidden flex-1 cursor-pointer"
+                        title="Click to view full code in drawer"
+                      >
                         {isLoadingThis ? (
                           <Loader2 className="w-4 h-4 text-emerald-700 animate-spin shrink-0" />
                         ) : (
@@ -425,9 +445,23 @@ export default function RepoWorkspace() {
                           {file.path}
                         </span>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-mono shrink-0 ml-2">
-                        {Math.round(file.size / 1024)} KB
-                      </span>
+
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {Math.round(file.size / 1024)} KB
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAskAiAboutFile(file.path);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-700 text-emerald-700 hover:text-white border border-emerald-200 hover:border-emerald-700 text-[11px] font-semibold flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                          title="Ask AI about this file"
+                        >
+                          <Sparkles className="w-3 h-3 text-emerald-600 group-hover:text-white" />
+                          <span>Ask AI</span>
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -445,6 +479,7 @@ export default function RepoWorkspace() {
         repoName={repo.name}
         commitSha={repo.latestCommit || repo.defaultBranch}
         onClose={() => setSelectedFileCitation(null)}
+        onAskAi={handleAskAiAboutFile}
       />
     </div>
   );

@@ -34,6 +34,7 @@ interface CitationDrawerProps {
   repoName?: string;
   commitSha?: string;
   onClose: () => void;
+  onAskAi?: (filePath: string) => void;
 }
 
 export default function CitationDrawer({
@@ -43,6 +44,7 @@ export default function CitationDrawer({
   repoName,
   commitSha,
   onClose,
+  onAskAi,
 }: CitationDrawerProps) {
   const [copied, setCopied] = useState(false);
   const [showFullFile, setShowFullFile] = useState(false);
@@ -243,6 +245,21 @@ export default function CitationDrawer({
                 >
                   <span className="flex items-center gap-1">
                     <Sparkles className="w-3.5 h-3.5" /> Explain Code
+                  </span>
+                </button>
+              )}
+
+              {onAskAi && citation && (
+                <button
+                  onClick={() => {
+                    onAskAi(citation.filePath);
+                    onClose();
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#008F75] hover:bg-[#00735E] text-white shadow-xs transition-all"
+                  title="Open AI Chat focused on this file"
+                >
+                  <span className="flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5" /> Ask AI About File
                   </span>
                 </button>
               )}

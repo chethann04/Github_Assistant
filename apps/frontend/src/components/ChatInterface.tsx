@@ -32,6 +32,8 @@ interface ChatInterfaceProps {
   repositoryId: string;
   repoName: string;
   files?: Array<{ path: string; size: number }>;
+  initialSelectedFile?: string;
+  initialMode?: ChatMode;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
@@ -85,21 +87,37 @@ const MODES: Array<{ id: ChatMode; label: string; icon: any; description: string
 
 const MODE_PROMPTS: Record<ChatMode, string[]> = {
   repo:         ["Explain the high-level architecture", "Where are the main API endpoints?", "How is state managed?", "What are the key dependencies?"],
-  file:         ["What does this file do?", "Explain the main function here", "What are the imports used for?", "Any potential bugs in this file?"],
+  file: [
+    "Explain this file",
+    "Summarize this file",
+    "Find bugs",
+    "Explain dependencies",
+    "Explain architecture",
+    "Suggest improvements",
+    "Generate documentation",
+    "Generate tests",
+  ],
   debug:        ["Analyze potential null pointer issues", "Find unhandled promise rejections", "What could cause race conditions?", "Check for security vulnerabilities"],
   architecture: ["Describe the layered architecture", "Map the data flow through the system", "What design patterns are used?", "Identify potential bottlenecks"],
   commits:      ["Summarize recent changes", "What major features were added recently?", "Any breaking changes in commits?", "Which files change most frequently?"],
 };
 
-export default function ChatInterface({ repositoryId, repoName, files = [] }: ChatInterfaceProps) {
+export default function ChatInterface({
+  repositoryId,
+  repoName,
+  files = [],
+  initialSelectedFile = "",
+  initialMode = "repo",
+}: ChatInterfaceProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<CitationData | null>(null);
-  const [mode, setMode] = useState<ChatMode>("repo");
-  const [selectedModel, setSelectedModel] = useState<AIModelProvider>("dual");
+  const [mode, setMode] = useState<ChatMode>(initialMode);
+  const [selectedFile, setSelectedFile] = useState<string>(initialSelectedFile || (files[0]?.path || ""));
+  const [selectedModel, setSelectedModel] = useState<AIModelProvider>("openai");
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [availableProviders, setAvailableProviders] = useState<{
     gemini: boolean;
@@ -109,11 +127,12 @@ export default function ChatInterface({ repositoryId, repoName, files = [] }: Ch
     openaiModel?: string;
     geminiModel?: string;
   }>({
-    gemini: true,
+    gemini: false,
     openai: true,
-    activeDefault: "dual",
+    activeDefault: "openai",
+    isNvidia: true,
+    openaiModel: "z-ai/glm-5.2",
   });
-  const [selectedFile, setSelectedFile] = useState<string>("");
   const [showSidebar, setShowSidebar] = useState(false);
   const [renamingSession, setRenamingSession] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
