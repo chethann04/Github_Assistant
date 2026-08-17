@@ -66,7 +66,8 @@ router.post('/:repoId/security', async (req: Request, res: Response) => {
     });
     if (!repo) return res.status(404).json({ error: 'Repository not found' });
 
-    const findings = await IntelligenceService.scanSecurity(repo.id);
+    const forceRescan = Boolean(req.body?.forceRescan || req.body?.rescan);
+    const findings = await IntelligenceService.scanSecurity(repo.id, forceRescan);
     return res.json(findings);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

@@ -176,12 +176,6 @@ export default function Home() {
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#E8F7F2] border border-[#D9E5E1] text-[#008F75] shadow-2xs text-xs font-semibold">
-            <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
-            V1 Ingestion Queue Active
-          </span>
-        </div>
       </header>
 
       {/* Main Content Area */}

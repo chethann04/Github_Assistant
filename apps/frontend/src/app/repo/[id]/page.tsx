@@ -333,12 +333,12 @@ export default function RepoWorkspace() {
   );
 
   return (
-    <div className="min-h-screen flex bg-slate-50 relative text-slate-900 overflow-x-hidden">
+    <div className="h-screen flex bg-slate-50 relative text-slate-900 overflow-hidden">
       {/* Ambient background glow */}
       <div className="absolute top-[-10%] right-[5%] w-[500px] h-[500px] bg-emerald-100/40 rounded-full blur-[140px] pointer-events-none" />
 
       {/* ─── DESKTOP PERMANENT LEFT SIDEBAR ─────────────────────────────────── */}
-      <aside className="hidden lg:flex flex-col w-72 shrink-0 h-screen sticky top-0 bg-white border-r border-slate-200 shadow-xs z-30 overflow-y-auto">
+      <aside className="hidden lg:flex flex-col w-72 shrink-0 h-full bg-white border-r border-slate-200 shadow-xs z-30 overflow-y-auto no-scrollbar">
         {renderNavButtons()}
       </aside>
 
@@ -362,19 +362,19 @@ export default function RepoWorkspace() {
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto flex flex-col">
+        <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col">
           {renderNavButtons()}
         </div>
       </div>
 
       {/* ─── MAIN CONTENT AREA (TO THE RIGHT OF THE SIDEBAR) ────────────────── */}
-      <div className="flex-1 min-w-0 flex flex-col min-h-screen">
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-y-auto">
         {/* Header inside Main Area */}
-        <header className="sticky top-0 z-20 bg-white/90 backdrop-blur-md border-b border-slate-200/90 px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between shadow-2xs">
+        <header className="sticky top-0 z-20 bg-white/90 backdrop-blur-md border-b border-slate-200/90 px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between shadow-2xs w-full shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => setIsMobileSidebarOpen(true)}
-              className="lg:hidden p-2 rounded-xl text-slate-700 hover:bg-slate-100 border border-slate-200"
+              className="lg:hidden p-2 rounded-xl text-slate-700 hover:bg-slate-100 border border-slate-200 shrink-0"
               title="Open Navigation Menu"
             >
               <Menu className="w-4 h-4" />
@@ -392,7 +392,7 @@ export default function RepoWorkspace() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" /> Indexed & Ready
             </span>

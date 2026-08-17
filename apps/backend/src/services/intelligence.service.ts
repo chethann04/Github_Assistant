@@ -34,6 +34,7 @@ export interface BugIssue {
 }
 
 export type SecuritySeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+export type SecurityConfidence = 'CONFIRMED' | 'HIGH_CONFIDENCE' | 'POTENTIAL' | 'INFO';
 export type SecurityCategory =
   | 'HARDCODED_SECRETS'
   | 'INSECURE_AUTH'
@@ -48,16 +49,23 @@ export type SecurityCategory =
 
 export interface SecurityFinding {
   id: string;
+  repositoryId: string;
+  commitSha: string;
   severity: SecuritySeverity;
   category: SecurityCategory;
   cwe?: string;
-  confidence: 'CONFIRMED' | 'LIKELY' | 'POTENTIAL';
+  confidence: SecurityConfidence;
   title: string;
   filePath: string;
+  startLine: number;
+  endLine: number;
   lineRange: string;
   evidence: string;
+  problem: string;
+  whyItMatters: string;
   explanation: string;
   suggestedRemediation: string;
+  recommendedFix: string;
 }
 
 export interface CommitSummary {
@@ -861,28 +869,35 @@ Time/space complexity and tricky edge cases (e.g. null inputs, concurrency).`;
   /**
    * Dedicated Security Vulnerability & OWASP Audit
    */
-  public static async scanSecurity(repoId: string): Promise<SecurityFinding[]> {
+  /**
+   * Dedicated Security Vulnerability & OWASP Audit with Grounding & Deduplication
+   */
+  public static async scanSecurity(repoId: string, forceRescan = false): Promise<SecurityFinding[]> {
     const overallStart = Date.now();
     const repo = await prisma.repository.findUnique({ where: { id: repoId } });
     if (!repo) throw new Error('Repository not found');
 
     const commitSha = repo.latestCommit || repo.defaultBranch || 'HEAD';
-    const cached = AnalysisCacheService.get<SecurityFinding[]>(repoId, commitSha, 'SECURITY' as any);
-    if (cached) {
-      this.logInstrumentation({
-        repoSize: 'CACHED',
-        analysisType: 'SECURITY',
-        candidateChunks: 0,
-        selectedChunks: 0,
-        retrievalTimeSec: '0.00',
-        promptTimeSec: '0.00',
-        tokenEstimate: 0,
-        llmCalls: 0,
-        llmTimeSec: '0.00',
-        totalTimeSec: ((Date.now() - overallStart) / 1000).toFixed(2),
-        cacheHit: true,
-      });
-      return cached;
+
+    // Check Cache unless explicitly requesting fresh rescan
+    if (!forceRescan) {
+      const cached = AnalysisCacheService.get<SecurityFinding[]>(repoId, commitSha, 'SECURITY' as any);
+      if (cached) {
+        this.logInstrumentation({
+          repoSize: 'CACHED',
+          analysisType: 'SECURITY',
+          candidateChunks: 0,
+          selectedChunks: 0,
+          retrievalTimeSec: '0.00',
+          promptTimeSec: '0.00',
+          tokenEstimate: 0,
+          llmCalls: 0,
+          llmTimeSec: '0.00',
+          totalTimeSec: ((Date.now() - overallStart) / 1000).toFixed(2),
+          cacheHit: true,
+        });
+        return cached;
+      }
     }
 
     const { citations, profile, totalCandidatesFetched, retrievalTimeMs } =
@@ -904,31 +919,37 @@ Time/space complexity and tricky edge cases (e.g. null inputs, concurrency).`;
 For each vulnerability found, return a JSON object with:
 - severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"
 - category: "HARDCODED_SECRETS" | "INSECURE_AUTH" | "INJECTION_RISK" | "XSS_RISK" | "INSECURE_DATABASE" | "SENSITIVE_DATA_EXPOSURE" | "INSECURE_LOGGING" | "DEPENDENCY_RISK" | "INSECURE_CONFIG" | "INPUT_VALIDATION"
-- cwe: string (e.g. "CWE-79", "CWE-89", "CWE-798", "CWE-312")
-- confidence: "CONFIRMED" | "LIKELY" | "POTENTIAL"
+- cwe: string (e.g. "CWE-798", "CWE-89", "CWE-79", "CWE-287", "CWE-532", "CWE-20", "CWE-16")
+- confidence: "CONFIRMED" | "HIGH_CONFIDENCE" | "POTENTIAL" | "INFO"
 - title: string (concise security title)
 - filePath: string (exact relative path from evidence)
-- lineRange: string (e.g. "Lines 20-35")
+- startLine: number
+- endLine: number
 - evidence: string (sanitized, masked snippet illustrating the flaw)
-- explanation: string (detailed explanation of the attack vector and security impact)
-- suggestedRemediation: string (actionable remediation steps and secure code pattern)
+- problem: string (concise description of the vulnerability)
+- whyItMatters: string (attack vector and realistic security impact)
+- explanation: string (detailed security analysis)
+- suggestedRemediation: string (actionable remediation steps)
+- recommendedFix: string (exact secure code replacement pattern)
 
-CRITICAL SECURITY RULE:
-Never output real secrets or keys in full. If a secret is identified, mask it (e.g. "sk-****abcd").
-Every finding MUST be strictly grounded in the provided code evidence. Output strict JSON array only.`;
+CRITICAL SECURITY RULES:
+1. CONFIDENCE: Do not mark suspicion as CONFIRMED unless concrete evidence exists. console.warn(..., err.message) is POTENTIAL or INFO.
+2. SECRETS: Never output complete secrets. Always mask (e.g. "sk-proj-****abcd"). Ignore placeholder secrets (e.g. "YOUR_API_KEY", "example_key").
+3. GROUNDING: Only report vulnerabilities directly present in the provided code snippets. Never invent file paths or line ranges. Output strict JSON array only.`;
 
-    const focusedCitations = citations.slice(0, 6);
+    const focusedCitations = citations.slice(0, 8);
     const userPrompt = `Perform a comprehensive Security & OWASP Audit for ${repo.owner}/${repo.name} (${profile.tier} repository):\n\n${focusedCitations
-      .map((c) => `File: ${c.filePath} (Lines ${c.startLine}-${c.endLine})\n\`\`\`\n${maskSecrets(c.snippet.slice(0, 600))}\n\`\`\``)
+      .map((c) => `File: ${c.filePath} (Lines ${c.startLine}-${c.endLine})\n\`\`\`\n${maskSecrets(c.snippet.slice(0, 700))}\n\`\`\``)
       .join('\n\n')}`;
 
     const promptTimeSec = ((Date.now() - promptStart) / 1000).toFixed(2);
     const tokenEstimate = Math.ceil((systemPrompt.length + userPrompt.length) / 3.5);
 
     const llmStart = Date.now();
-    let securityResult: SecurityFinding[] = [];
+    let rawFindings: SecurityFinding[] = [];
 
     const validSeverities: SecuritySeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+    const validConfidences: SecurityConfidence[] = ['CONFIRMED', 'HIGH_CONFIDENCE', 'POTENTIAL', 'INFO'];
     const validCategories: SecurityCategory[] = [
       'HARDCODED_SECRETS',
       'INSECURE_AUTH',
@@ -942,31 +963,70 @@ Every finding MUST be strictly grounded in the provided code evidence. Output st
       'INPUT_VALIDATION',
     ];
 
+    const categoryCweMap: Record<SecurityCategory, string> = {
+      HARDCODED_SECRETS: 'CWE-798',
+      INSECURE_AUTH: 'CWE-287',
+      INJECTION_RISK: 'CWE-89',
+      XSS_RISK: 'CWE-79',
+      INSECURE_DATABASE: 'CWE-89',
+      SENSITIVE_DATA_EXPOSURE: 'CWE-312',
+      INSECURE_LOGGING: 'CWE-532',
+      DEPENDENCY_RISK: 'CWE-1395',
+      INSECURE_CONFIG: 'CWE-16',
+      INPUT_VALIDATION: 'CWE-20',
+    };
+
+    const validFilePaths = new Set(citations.map((c) => c.filePath));
+
     try {
-      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 1800);
+      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2000);
       const jsonMatch = aiResult?.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          securityResult = parsed.map((sec: any, idx: number) => {
+          parsed.forEach((sec: any, idx: number) => {
             const rawCat = (sec.category || 'INSECURE_CONFIG').toUpperCase();
-            const category = validCategories.includes(rawCat) ? rawCat : 'INSECURE_CONFIG';
+            const category = validCategories.includes(rawCat as any) ? (rawCat as SecurityCategory) : 'INSECURE_CONFIG';
             const rawSev = (sec.severity || 'MEDIUM').toUpperCase();
-            const severity = validSeverities.includes(rawSev) ? rawSev : 'MEDIUM';
+            const severity = validSeverities.includes(rawSev as any) ? (rawSev as SecuritySeverity) : 'MEDIUM';
+            const rawConf = (sec.confidence || 'POTENTIAL').toUpperCase();
+            const confidence = validConfidences.includes(rawConf as any) ? (rawConf as SecurityConfidence) : 'POTENTIAL';
 
-            return {
+            const matchedChunk = citations.find((c) => c.filePath === sec.filePath) || citations[0];
+            const filePath = matchedChunk ? matchedChunk.filePath : (validFilePaths.has(sec.filePath) ? sec.filePath : 'apps/backend/src/index.ts');
+            const startLine = sec.startLine || matchedChunk?.startLine || 1;
+            const endLine = sec.endLine || matchedChunk?.endLine || startLine + 10;
+
+            const cwe = sec.cwe && /^CWE-\d+$/i.test(sec.cwe) ? sec.cwe.toUpperCase() : categoryCweMap[category];
+
+            // Ignore placeholder secrets
+            if (category === 'HARDCODED_SECRETS') {
+              const ev = (sec.evidence || '').toLowerCase();
+              if (/(your_api_key|api_key_here|example_key|dummy_token|changeme|placeholder)/i.test(ev)) {
+                return;
+              }
+            }
+
+            rawFindings.push({
               id: `sec-${idx + 1}`,
+              repositoryId: repo.id,
+              commitSha,
               severity,
               category,
-              cwe: sec.cwe || 'CWE-699',
-              confidence: ['CONFIRMED', 'LIKELY', 'POTENTIAL'].includes(sec.confidence) ? sec.confidence : 'LIKELY',
+              cwe,
+              confidence,
               title: sec.title || 'Security Finding',
-              filePath: sec.filePath || citations[0]?.filePath || 'src/index.ts',
-              lineRange: sec.lineRange || 'N/A',
-              evidence: maskSecrets(sec.evidence || 'Evidence masked'),
-              explanation: sec.explanation || 'May expose application or data to unauthorized access.',
+              filePath,
+              startLine,
+              endLine,
+              lineRange: `Lines ${startLine}–${endLine}`,
+              evidence: maskSecrets(sec.evidence || matchedChunk?.snippet?.slice(0, 200) || 'Evidence masked'),
+              problem: sec.problem || sec.title || 'Security weakness detected.',
+              whyItMatters: sec.whyItMatters || sec.explanation || 'May expose application or data to unauthorized access.',
+              explanation: sec.explanation || sec.whyItMatters || 'Potential vulnerability identified.',
               suggestedRemediation: sec.suggestedRemediation || 'Follow OWASP defensive security guidelines.',
-            };
+              recommendedFix: sec.recommendedFix || sec.suggestedRemediation || 'Apply secure sanitization or configuration guard.',
+            });
           });
         }
       }
@@ -976,28 +1036,53 @@ Every finding MUST be strictly grounded in the provided code evidence. Output st
 
     const llmTimeSec = ((Date.now() - llmStart) / 1000).toFixed(2);
 
-    // Deterministic secret scanner fallback if LLM returns empty
-    if (securityResult.length === 0) {
+    // Deterministic secret and config scanner fallback if LLM returns empty
+    if (rawFindings.length === 0) {
       citations.forEach((cit, idx) => {
         if (/([a-zA-Z0-9_-]{20,})/.test(cit.snippet) && /(key|token|secret|password|bearer)/i.test(cit.snippet)) {
-          securityResult.push({
-            id: `sec-${idx + 1}`,
-            severity: 'HIGH',
-            category: 'HARDCODED_SECRETS',
-            cwe: 'CWE-798',
-            confidence: 'LIKELY',
-            title: `Potential hardcoded credential in ${cit.filePath.split('/').pop()}`,
-            filePath: cit.filePath,
-            lineRange: `Lines ${cit.startLine}–${cit.endLine}`,
-            evidence: maskSecrets(cit.snippet.slice(0, 150)),
-            explanation: 'Hardcoded secrets embedded in source control risk unauthorized access and credential compromise.',
-            suggestedRemediation: 'Extract credentials to environment variables or an external secret vault.',
-          });
+          if (!/(your_api_key|api_key_here|example_key|dummy_token|changeme)/i.test(cit.snippet)) {
+            rawFindings.push({
+              id: `sec-${idx + 1}`,
+              repositoryId: repo.id,
+              commitSha,
+              severity: 'HIGH',
+              category: 'HARDCODED_SECRETS',
+              cwe: 'CWE-798',
+              confidence: 'HIGH_CONFIDENCE',
+              title: `Potential hardcoded credential in ${cit.filePath.split('/').pop()}`,
+              filePath: cit.filePath,
+              startLine: cit.startLine,
+              endLine: cit.endLine,
+              lineRange: `Lines ${cit.startLine}–${cit.endLine}`,
+              evidence: maskSecrets(cit.snippet.slice(0, 150)),
+              problem: 'Hardcoded secret token pattern detected in source code.',
+              whyItMatters: 'Hardcoded credentials in version control can lead to unauthorized API access and data breach.',
+              explanation: 'Hardcoded secrets embedded in source control risk unauthorized access and credential compromise.',
+              suggestedRemediation: 'Extract credentials to environment variables or an external secret vault.',
+              recommendedFix: 'process.env.API_KEY || config.apiKey',
+            });
+          }
         }
       });
     }
 
-    AnalysisCacheService.set(repoId, commitSha, 'SECURITY' as any, securityResult);
+    // Deduplication: Deduplicate using repoId + commitSha + filePath + startLine + category + normalizedTitle
+    const seenDedupeKeys = new Set<string>();
+    const deduplicatedFindings: SecurityFinding[] = [];
+
+    for (const finding of rawFindings) {
+      const normalizedTitle = finding.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const dedupeKey = `${finding.repositoryId}:${finding.commitSha}:${finding.filePath}:${finding.startLine}:${finding.category}:${normalizedTitle}`;
+      if (!seenDedupeKeys.has(dedupeKey)) {
+        seenDedupeKeys.add(dedupeKey);
+        deduplicatedFindings.push({
+          ...finding,
+          id: `sec-${deduplicatedFindings.length + 1}`,
+        });
+      }
+    }
+
+    AnalysisCacheService.set(repoId, commitSha, 'SECURITY' as any, deduplicatedFindings);
 
     this.logInstrumentation({
       repoSize: `${profile.tier} (${profile.totalChunks} chunks, ${profile.totalFiles} files)`,
@@ -1013,7 +1098,7 @@ Every finding MUST be strictly grounded in the provided code evidence. Output st
       cacheHit: false,
     });
 
-    return securityResult;
+    return deduplicatedFindings;
   }
 
   /**

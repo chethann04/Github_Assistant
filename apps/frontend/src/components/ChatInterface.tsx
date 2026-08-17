@@ -379,6 +379,17 @@ export default function ChatInterface({
     }
   };
 
+  const handleModeChange = (newMode: ChatMode) => {
+    setMode(newMode);
+    if (messages.length <= 1) {
+      setMessages([{
+        id: "initial",
+        role: "ASSISTANT",
+        content: `Hello! I'm your AI assistant for **${repoName}**. I'm in **${MODES.find(m => m.id === newMode)?.label}** mode. What would you like to know?`,
+      }]);
+    }
+  };
+
   const filteredFiles = files.filter((f) =>
     f.path.toLowerCase().includes(fileFilter.toLowerCase())
   );
@@ -386,7 +397,7 @@ export default function ChatInterface({
   const initialMessages = messages.length <= 1;
 
   return (
-    <div className="flex h-[780px] w-full rounded-3xl border border-white/80 overflow-hidden shadow-xl shadow-slate-900/5 bg-white/85 backdrop-blur-2xl relative">
+    <div className="flex h-[calc(100vh-140px)] min-h-[600px] w-full rounded-3xl border border-white/80 overflow-hidden shadow-xl shadow-slate-900/5 bg-white/85 backdrop-blur-2xl relative">
       {/* Session Sidebar */}
       {showSidebar && (
         <div className="w-64 shrink-0 bg-white/70 backdrop-blur-xl border-r border-slate-200/80 flex flex-col z-20">
@@ -451,33 +462,33 @@ export default function ChatInterface({
       )}
 
       {/* Main Chat Panel */}
-      <div className="flex-1 flex flex-col bg-slate-50/50 backdrop-blur-md relative">
+      <div className="flex-1 flex flex-col bg-slate-50/50 backdrop-blur-md relative min-w-0">
         {/* Mode & Model Selector Header */}
-        <div className="p-3 border-b border-slate-200/80 flex items-center justify-between bg-white/80 backdrop-blur-xl z-10">
-          <div className="flex items-center gap-2">
+        <div className="p-3 border-b border-slate-200/80 flex items-center justify-between gap-3 bg-white/80 backdrop-blur-xl z-10 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1 overflow-x-auto no-scrollbar py-0.5">
             <button
               onClick={() => setShowSidebar(!showSidebar)}
-              className="p-2 rounded-xl hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200/80 transition-all shadow-2xs"
+              className="p-2 rounded-xl hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200/80 transition-all shadow-2xs shrink-0"
               title="Toggle conversations"
             >
               <FolderOpen className="w-4 h-4" />
             </button>
 
-            <div className="flex items-center gap-1 bg-slate-100/90 backdrop-blur-md p-1 rounded-full border border-slate-200 shadow-inner">
+            <div className="flex items-center gap-1 bg-slate-100/90 backdrop-blur-md p-1 rounded-full border border-slate-200 shadow-inner shrink-0">
               {MODES.map((m) => {
                 const Icon = m.icon;
                 const isSelected = mode === m.id;
                 return (
                   <button
                     key={m.id}
-                    onClick={() => { setMode(m.id); }}
-                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                    onClick={() => handleModeChange(m.id)}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all shrink-0 ${
                       isSelected
                         ? "bg-slate-900 text-white shadow-sm border border-slate-800"
                         : "text-slate-600 hover:text-slate-900 hover:bg-white/80"
                     }`}
                   >
-                    <Icon className={`w-3.5 h-3.5 ${isSelected ? "text-emerald-400" : ""}`} />
+                    <Icon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? "text-emerald-400" : ""}`} />
                     <span>{m.label}</span>
                   </button>
                 );
@@ -485,7 +496,7 @@ export default function ChatInterface({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {/* AI Model Selector Dropdown */}
             <div className="relative" ref={modelDropdownRef}>
               {(() => {
