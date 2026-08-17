@@ -1,49 +1,79 @@
 import OpenAI from 'openai';
 import { config } from '../config/env.js';
+import { resolveProviderName, classifyProviderError } from '../ai/provider-config.js';
 
 export interface OpenAILLMError {
   code: 'LLM_TEMPORARILY_UNAVAILABLE' | 'LLM_RATE_LIMITED' | 'LLM_TIMEOUT' | 'LLM_ERROR';
   message: string;
 }
 
-export class OpenAIService {
-  private static client: OpenAI | null =
-    config.openaiApiKey && config.openaiApiKey.length > 10
-      ? new OpenAI({
-          apiKey: config.openaiApiKey,
-          baseURL: config.openaiBaseUrl || undefined,
-        })
-      : null;
+export interface ExecutionContext {
+  apiKey?: string;
+  baseURL?: string;
+  model?: string;
+  providerName?: string;
+  keyId?: string;
+}
 
-  private static candidateModels = config.isNvidiaProvider
+export class OpenAIService {
+  private static cachedClient: OpenAI | null = null;
+  private static cachedKey: string = '';
+  private static cachedUrl: string = '';
+
+  /**
+   * Dynamically retrieves or instantiates OpenAI client based on resolved config.
+   */
+  public static getClient(): OpenAI | null {
+    const key = config.openaiApiKey;
+    const url = config.openaiBaseUrl || '';
+
+    if (!key || key.length < 5) {
+      return null;
+    }
+
+    if (this.cachedClient && this.cachedKey === key && this.cachedUrl === url) {
+      return this.cachedClient;
+    }
+
+    this.cachedKey = key;
+    this.cachedUrl = url;
+    this.cachedClient = new OpenAI({
+      apiKey: key,
+      baseURL: url || undefined,
+    });
+
+    return this.cachedClient;
+  }
+
+  private static candidateModels = config.isNvidiaProvider || config.isOpenRouterProvider
     ? Array.from(new Set([config.openaiModel, 'z-ai/glm-5.2']))
     : [config.openaiModel, 'gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'];
 
   /**
-   * Helper to check if OpenAI/NVIDIA is configured.
+   * Helper to check if LLM provider is configured.
    */
   public static isConfigured(): boolean {
-    return Boolean(this.client);
+    return Boolean(this.getClient());
+  }
+
+  /**
+   * Helper to get active provider human-readable name derived strictly from configuration.
+   */
+  public static getProviderName(baseUrl?: string): string {
+    return resolveProviderName(baseUrl || config.openaiBaseUrl, config.llmProvider);
   }
 
   /**
    * Helper to determine if an error is transient and retryable (503, 429, timeout, network error).
    */
   private static isTransientError(err: any): { isTransient: boolean; status?: number; code?: string; isRateLimit: boolean } {
-    const status = err?.status || err?.response?.status || err?.code;
-    const msg = (err?.message || '').toLowerCase();
-
-    if (status === 429 || msg.includes('429') || msg.includes('quota') || msg.includes('rate limit') || msg.includes('too many requests')) {
-      return { isTransient: true, status: 429, code: 'LLM_RATE_LIMITED', isRateLimit: true };
-    }
-    if (status === 503 || status === 502 || msg.includes('503') || msg.includes('502') || msg.includes('service unavailable') || msg.includes('overloaded')) {
-      return { isTransient: true, status: 503, code: 'LLM_TEMPORARILY_UNAVAILABLE', isRateLimit: false };
-    }
-    if (msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnreset') || msg.includes('fetch failed')) {
-      return { isTransient: true, status: 408, code: 'LLM_TIMEOUT', isRateLimit: false };
-    }
-
-    return { isTransient: false, status: typeof status === 'number' ? status : undefined, isRateLimit: false };
+    const classification = classifyProviderError(err);
+    return {
+      isTransient: classification.isRecoverable,
+      status: classification.status,
+      code: classification.type,
+      isRateLimit: classification.type === 'RATE_LIMIT',
+    };
   }
 
   /**
@@ -74,25 +104,32 @@ export class OpenAIService {
   /**
    * Maps internal errors to clean, safe user-facing error messages without exposing keys.
    */
-  public static mapUserFriendlyError(err: any): OpenAILLMError {
+  public static mapUserFriendlyError(err: any, overrideProviderName?: string): OpenAILLMError {
     const { status, code } = this.isTransientError(err);
-    const isNvidia = config.isNvidiaProvider;
-    const providerName = isNvidia ? 'NVIDIA NIM (GLM-5.2)' : 'ChatGPT';
+    const providerName = overrideProviderName || this.getProviderName();
+    const isNvidia = providerName.toLowerCase().includes('nvidia');
+    const isOpenRouter = providerName.toLowerCase().includes('openrouter');
 
+    if (status === 402 || err?.message?.includes('402') || err?.message?.toLowerCase().includes('insufficient credits')) {
+      return {
+        code: 'LLM_ERROR',
+        message: `${providerName} error (HTTP 402): Insufficient account credits. Please check your credit balance at https://openrouter.ai/settings/credits.`,
+      };
+    }
     if (status === 401 || err?.message?.includes('401') || err?.message?.toLowerCase().includes('auth') || err?.message?.toLowerCase().includes('api key')) {
       return {
         code: 'LLM_ERROR',
         message: isNvidia
           ? 'NVIDIA GLM-5.2 authentication failed. Please verify your NVIDIA_API_KEY.'
+          : isOpenRouter
+          ? 'OpenRouter authentication failed. Please verify your OPENROUTER_API_KEY.'
           : 'OpenAI authentication failed. Please check your API key.',
       };
     }
     if (status === 404 || err?.message?.includes('404')) {
       return {
         code: 'LLM_ERROR',
-        message: isNvidia
-          ? `NVIDIA model "${config.openaiModel}" not found or unsupported on NVIDIA NIM.`
-          : 'OpenAI model not found.',
+        message: `${providerName} model "${config.openaiModel}" not found or unsupported.`,
       };
     }
     if (status === 429 || code === 'LLM_RATE_LIMITED') {
@@ -125,7 +162,7 @@ export class OpenAIService {
   }
 
   /**
-   * Format history for OpenAI/NVIDIA chat completions
+   * Format history for OpenAI/NVIDIA/OpenRouter chat completions
    */
   private static formatMessages(
     systemPrompt: string,
@@ -149,25 +186,44 @@ export class OpenAIService {
   }
 
   /**
-   * Stream a chat response using NVIDIA NIM / OpenAI with bounded retry policy.
+   * Stream a chat response using NVIDIA NIM / OpenRouter / OpenAI with bounded retry policy.
    */
   public static async *streamChat(
     systemPrompt: string,
     userMessage: string,
-    conversationHistory: Array<{ role: 'user' | 'model'; parts: string }> = []
+    conversationHistory: Array<{ role: 'user' | 'model'; parts: string }> = [],
+    context?: ExecutionContext
   ): AsyncGenerator<string, void, unknown> {
-    if (!this.client) {
-      yield config.isNvidiaProvider
-        ? 'NVIDIA API key is not configured. Please set NVIDIA_API_KEY in apps/backend/.env.'
-        : 'OpenAI API key is not configured. Please set OPENAI_API_KEY in apps/backend/.env.';
+    const providerName = context?.providerName || this.getProviderName();
+    const effectiveBaseUrl = context?.baseURL || config.openaiBaseUrl;
+    const effectiveModel = context?.model || config.openaiModel;
+    const keyLabel = context?.keyId ? ` [${context.keyId}]` : '';
+
+    let client: OpenAI | null = null;
+    if (context?.apiKey) {
+      client = new OpenAI({
+        apiKey: context.apiKey,
+        baseURL: effectiveBaseUrl || undefined,
+      });
+    } else {
+      client = this.getClient();
+    }
+
+    if (!client) {
+      const keyName = config.isNvidiaProvider
+        ? 'NVIDIA_API_KEY'
+        : config.isOpenRouterProvider
+        ? 'OPENROUTER_API_KEY'
+        : 'OPENAI_API_KEY';
+      yield `${providerName} API key is not configured. Please set ${keyName} in .env.`;
       return;
     }
 
     const messages = this.formatMessages(systemPrompt, userMessage, conversationHistory);
-    const modelsToTry = [config.openaiModel]; // Stick to primary configured model
+    const modelsToTry = [effectiveModel]; // Stick to primary configured model
     const maxRetries = 2; // Bounded: 1 attempt + 1 retry max
     const overallStartTime = Date.now();
-    const maxBudgetMs = 75000; // 75s total budget ceiling for reliable inference
+    const maxBudgetMs = 90000; // 90s total budget ceiling for reliable inference
 
     let lastError: any = null;
 
@@ -178,10 +234,10 @@ export class OpenAIService {
         }
 
         const startTime = Date.now();
-        console.log(`[AI] Provider: ${config.isNvidiaProvider ? 'NVIDIA NIM' : 'OpenAI'} | Model: ${modelName} | BaseURL: ${config.openaiBaseUrl || 'default'} | Stream: true | Attempt: ${attempt}`);
+        console.log(`[AI] Provider: ${providerName}${keyLabel} | Model: ${modelName} | BaseURL: ${effectiveBaseUrl || 'default'} | Stream: true | Attempt: ${attempt}`);
 
         try {
-          const stream = await this.client.chat.completions.create({
+          const stream = await client.chat.completions.create({
             model: modelName,
             messages,
             temperature: 0.2,
@@ -205,7 +261,7 @@ export class OpenAIService {
           }
         } catch (err: any) {
           lastError = err;
-          const { isTransient, status, isRateLimit } = this.isTransientError(err);
+          const { isTransient, status } = this.isTransientError(err);
           const { delayMs, canRetry } = this.getRetryDelay(err, attempt);
 
           console.log(`[AI] Error attempt=${attempt} model=${modelName} status=${status || 'error'} msg="${err?.message?.substring(0, 120)}" retrying=${isTransient && attempt < maxRetries && canRetry}`);
@@ -221,27 +277,54 @@ export class OpenAIService {
       }
     }
 
-    const friendly = this.mapUserFriendlyError(lastError);
+    if (lastError && context) {
+      throw lastError;
+    }
+
+    const friendly = this.mapUserFriendlyError(lastError, providerName);
     yield `\n\n*${friendly.message}*`;
   }
 
   /**
-   * Non-streaming direct generation with NVIDIA / OpenAI with bounded retry policy.
+   * Non-streaming direct generation with NVIDIA / OpenRouter / OpenAI with bounded retry policy.
    */
-  public static async generate(systemPrompt: string, userMessage: string, maxTokens: number = 2048): Promise<string> {
-    if (!this.client) {
+  public static async generate(
+    systemPrompt: string,
+    userMessage: string,
+    maxTokens: number = 2048,
+    context?: ExecutionContext
+  ): Promise<string> {
+    const providerName = context?.providerName || this.getProviderName();
+    const effectiveBaseUrl = context?.baseURL || config.openaiBaseUrl;
+    const effectiveModel = context?.model || config.openaiModel;
+    const keyLabel = context?.keyId ? ` [${context.keyId}]` : '';
+
+    let client: OpenAI | null = null;
+    if (context?.apiKey) {
+      client = new OpenAI({
+        apiKey: context.apiKey,
+        baseURL: effectiveBaseUrl || undefined,
+      });
+    } else {
+      client = this.getClient();
+    }
+
+    if (!client) {
+      const keyName = config.isNvidiaProvider
+        ? 'NVIDIA_API_KEY'
+        : config.isOpenRouterProvider
+        ? 'OPENROUTER_API_KEY'
+        : 'OPENAI_API_KEY';
       throw new Error(
-        config.isNvidiaProvider
-          ? 'NVIDIA API key not configured. Please set NVIDIA_API_KEY in your environment.'
-          : 'OpenAI API key not configured. Please set OPENAI_API_KEY in your environment.'
+        `${providerName} API key not configured. Please set ${keyName} in your environment.`
       );
     }
 
     const messages = this.formatMessages(systemPrompt, userMessage);
-    const modelsToTry = [config.openaiModel]; // Primary model
+    const modelsToTry = [effectiveModel]; // Primary model
     const maxRetries = 2; // Bounded: 1 attempt + 1 retry max
     const overallStartTime = Date.now();
-    const maxBudgetMs = 28000; // 28s total budget ceiling
+    const maxBudgetMs = 90000; // 90s total budget ceiling
     let lastError: any = null;
 
     for (const modelName of modelsToTry) {
@@ -251,10 +334,10 @@ export class OpenAIService {
         }
 
         const startTime = Date.now();
-        console.log(`[AI] Provider: ${config.isNvidiaProvider ? 'NVIDIA NIM' : 'OpenAI'} | Model: ${modelName} | BaseURL: ${config.openaiBaseUrl || 'default'} | Non-stream | Attempt: ${attempt}`);
+        console.log(`[AI] Provider: ${providerName}${keyLabel} | Model: ${modelName} | BaseURL: ${effectiveBaseUrl || 'default'} | Non-stream | Attempt: ${attempt}`);
 
         try {
-          const stream = await this.client.chat.completions.create({
+          const stream = await client.chat.completions.create({
             model: modelName,
             messages,
             temperature: 0.2,
@@ -298,7 +381,7 @@ export class OpenAIService {
       }
     }
 
-    const friendly = this.mapUserFriendlyError(lastError);
+    const friendly = this.mapUserFriendlyError(lastError, providerName);
     throw new Error(friendly.message);
   }
 

@@ -16,6 +16,9 @@ import {
 } from "lucide-react";
 import axios from "axios";
 
+import { useAnalysisJob } from "@/hooks/useAnalysisJob";
+import AnalysisProgressBanner from "@/components/AnalysisProgressBanner";
+
 interface DependencyNode {
   id: string;
   label: string;
@@ -48,58 +51,43 @@ interface DependencyGraphTabProps {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
 export default function DependencyGraphTab({ repositoryId }: DependencyGraphTabProps) {
-  const [graphData, setGraphData] = useState<DependencyGraphData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
-  const fetchGraph = async () => {
-    setLoading(true);
-    try {
-      const res = await axios.get(`${API_BASE}/intelligence/${repositoryId}/dependency-graph`);
-      setGraphData(res.data);
-      if (res.data.nodes.length > 0 && !selectedFile) {
-        setSelectedFile(res.data.nodes[0].id);
-      }
-    } catch (err) {
-      console.error("Failed to load dependency graph:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    result,
+    status,
+    progress,
+    currentStage,
+    error,
+    isStaleCommit,
+    isRunning,
+    triggerJob,
+    cancelJob,
+    retryJob,
+  } = useAnalysisJob<DependencyGraphData>({
+    repositoryId,
+    type: "DEPENDENCY_GRAPH",
+    autoRunIfNone: true,
+  });
+
+  const graphData: DependencyGraphData | null = result;
 
   useEffect(() => {
-    fetchGraph();
-  }, [repositoryId]);
+    if (graphData?.nodes && graphData.nodes.length > 0 && !selectedFile) {
+      setSelectedFile(graphData.nodes[0].id);
+    }
+  }, [graphData, selectedFile]);
 
-  if (loading) {
-    return (
-      <div className="w-full bg-white p-12 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center text-slate-500 gap-3">
-        <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm font-medium">Parsing repository AST and building static import dependency graph...</span>
-      </div>
-    );
-  }
-
-  if (!graphData || graphData.nodes.length === 0) {
-    return (
-      <div className="w-full bg-white p-12 rounded-2xl border border-slate-200 shadow-sm text-center text-slate-500">
-        <GitBranch className="w-10 h-10 text-slate-400 mx-auto mb-2" />
-        <h3 className="font-bold text-slate-800 text-base">No code dependencies detected</h3>
-        <p className="text-xs text-slate-500 mt-1">Unable to extract module import statements from indexed files.</p>
-      </div>
-    );
-  }
-
-  const activeNode = graphData.nodes.find((n) => n.id === selectedFile) || graphData.nodes[0];
+  const activeNode = graphData?.nodes?.find((n) => n.id === selectedFile) || graphData?.nodes?.[0];
 
   // Inward: Who imports this file? (edge.target === activeNode.id)
-  const inwardImports = graphData.edges.filter((e) => e.target === activeNode.id);
+  const inwardImports = graphData?.edges?.filter((e) => e.target === activeNode?.id) || [];
 
   // Outward: What does this file import? (edge.source === activeNode.id)
-  const outwardImports = graphData.edges.filter((e) => e.source === activeNode.id);
+  const outwardImports = graphData?.edges?.filter((e) => e.source === activeNode?.id) || [];
 
-  const filteredNodes = graphData.nodes.filter((n) =>
+  const filteredNodes = (graphData?.nodes || []).filter((n) =>
     n.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -120,38 +108,56 @@ export default function DependencyGraphTab({ repositoryId }: DependencyGraphTabP
         </div>
 
         <button
-          onClick={fetchGraph}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer"
+          onClick={() => triggerJob(true)}
+          disabled={isRunning}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer disabled:opacity-50"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? "animate-spin" : ""}`} />
           <span>Rebuild Graph</span>
         </button>
       </div>
 
-      {/* Metric Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-6">
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900">
-          <span className="text-xs font-semibold text-slate-500 block">Analyzed Code Files</span>
-          <span className="text-xl font-bold">{graphData.summary.totalFiles}</span>
-        </div>
-        <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-emerald-950">
-          <span className="text-xs font-semibold text-emerald-700 block">Internal Connections</span>
-          <span className="text-xl font-bold">{graphData.summary.totalDependencies}</span>
-        </div>
-        <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-blue-950">
-          <span className="text-xs font-semibold text-blue-700 block">External Packages</span>
-          <span className="text-xl font-bold">{graphData.summary.externalPackages.length}</span>
-        </div>
-        <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-950">
-          <span className="text-xs font-semibold text-amber-700 block">Most Central Hub</span>
-          <span className="text-sm font-bold truncate block">
-            {graphData.summary.mostImportedFiles[0]?.filePath.split("/").pop() || "None"}
-          </span>
-        </div>
+      {/* Background Analysis Progress & Stage Banner */}
+      <div className="mt-4">
+        <AnalysisProgressBanner
+          status={status}
+          progress={progress}
+          currentStage={currentStage}
+          error={error}
+          isStaleCommit={isStaleCommit}
+          onCancel={cancelJob}
+          onRetry={retryJob}
+          onRunLatest={() => triggerJob(true)}
+        />
       </div>
 
+      {/* Metric Summary Cards */}
+      {graphData?.summary && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-6">
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900">
+            <span className="text-xs font-semibold text-slate-500 block">Analyzed Code Files</span>
+            <span className="text-xl font-bold">{graphData.summary.totalFiles}</span>
+          </div>
+          <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-emerald-950">
+            <span className="text-xs font-semibold text-emerald-700 block">Internal Connections</span>
+            <span className="text-xl font-bold">{graphData.summary.totalDependencies}</span>
+          </div>
+          <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-blue-950">
+            <span className="text-xs font-semibold text-blue-700 block">External Packages</span>
+            <span className="text-xl font-bold">{graphData.summary.externalPackages?.length || 0}</span>
+          </div>
+          <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-950">
+            <span className="text-xs font-semibold text-amber-700 block">Most Central Hub</span>
+            <span className="text-sm font-bold truncate block">
+              {graphData.summary.mostImportedFiles?.[0]?.filePath.split("/").pop() || "None"}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Main 2-Column Interface */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
+      {graphData && graphData.nodes && graphData.nodes.length > 0 ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
         {/* Left Column: File Explorer List */}
         <div className="lg:col-span-5 border border-slate-200 rounded-2xl p-4 bg-slate-50/70 flex flex-col h-[580px]">
           <div className="relative mb-3">
@@ -209,11 +215,11 @@ export default function DependencyGraphTab({ repositoryId }: DependencyGraphTabP
                 <FileCode className="w-4 h-4" />
               </div>
               <div className="truncate">
-                <h3 className="font-bold text-slate-900 text-sm truncate">{activeNode.id}</h3>
+                <h3 className="font-bold text-slate-900 text-sm truncate">{activeNode?.id || "Selected Module"}</h3>
                 <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
-                  <span>Imported by <b className="text-emerald-700">{activeNode.inDegree}</b> files</span>
+                  <span>Imported by <b className="text-emerald-700">{activeNode?.inDegree || 0}</b> files</span>
                   <span>·</span>
-                  <span>Imports <b className="text-blue-700">{activeNode.outDegree}</b> files</span>
+                  <span>Imports <b className="text-blue-700">{activeNode?.outDegree || 0}</b> files</span>
                 </div>
               </div>
             </div>
@@ -278,7 +284,7 @@ export default function DependencyGraphTab({ repositoryId }: DependencyGraphTabP
           </div>
 
           {/* External Packages Pill Matrix */}
-          {graphData.summary.externalPackages.length > 0 && (
+          {graphData.summary.externalPackages?.length > 0 && (
             <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
               <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                 <Package className="w-4 h-4 text-purple-600" /> Detected External Packages ({graphData.summary.externalPackages.length})
@@ -297,6 +303,11 @@ export default function DependencyGraphTab({ repositoryId }: DependencyGraphTabP
           )}
         </div>
       </div>
+      ) : (
+        <div className="py-16 text-center text-slate-400 text-xs">
+          Click &quot;Rebuild Graph&quot; to parse repository imports and construct the dependency graph.
+        </div>
+      )}
     </div>
   );
 }

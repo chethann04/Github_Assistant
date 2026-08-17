@@ -2,6 +2,7 @@ import axios from 'axios';
 import { config } from '../config/env.js';
 import { RAGService, maskSecrets } from './rag.service.js';
 import { LLMService, LLMProviderType } from './llm.service.js';
+import { TaskType } from '../ai/index.js';
 import { GitHubService } from './github.service.js';
 import { AdaptiveRetrievalService } from './adaptive-retrieval.service.js';
 import { AnalysisCacheService } from './analysis-cache.service.js';
@@ -75,6 +76,15 @@ export interface CommitSummary {
   date: string;
   avatarUrl?: string;
   url: string;
+  files: Array<{
+    path: string;
+    status: string;
+    additions: number;
+    deletions: number;
+    previousPath?: string;
+  }>;
+  additions: number;
+  deletions: number;
 }
 
 export interface ImpactAnalysisResult {
@@ -93,11 +103,12 @@ export class IntelligenceService {
     systemPrompt: string,
     userPrompt: string,
     provider?: LLMProviderType,
-    maxTokens: number = 2048
+    maxTokens: number = 2048,
+    taskType?: TaskType
   ): Promise<string> {
     try {
       const activeProvider = provider || (config.isNvidiaProvider ? 'openai' : undefined);
-      return await LLMService.generate(systemPrompt, userPrompt, activeProvider, maxTokens);
+      return await LLMService.generate(systemPrompt, userPrompt, activeProvider, maxTokens, taskType);
     } catch (err: any) {
       console.warn('[IntelligenceService] Multi-model generation error:', err.message);
       return '';
@@ -240,7 +251,7 @@ Provide a concise impact summary for the developer.`;
     let summary = '';
     const llmStart = Date.now();
     try {
-      summary = await this.generateWithAI(systemPrompt, userPrompt, undefined, 800);
+      summary = await this.generateWithAI(systemPrompt, userPrompt, undefined, 800, 'architecture');
     } catch {
       summary = `Modifying \`${targetNormalized}\` has **${impactLevel}** impact on the codebase. It has ${directDependents.length} dependent module(s) directly referencing its exports.`;
     }
@@ -354,7 +365,7 @@ ${contextText || 'No indexed code available.'}`;
 
     const llmStart = Date.now();
     let finalResult = '';
-    const aiResult = await this.generateWithAI(systemPrompt, userPrompt);
+    const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2048, 'architecture');
     const llmTimeSec = ((Date.now() - llmStart) / 1000).toFixed(2);
 
     if (aiResult) {
@@ -443,7 +454,7 @@ ${citations.map((c) => `- \`${c.filePath}\` (Lines ${c.startLine}-${c.endLine}):
     const tokenEstimate = Math.ceil((systemPrompt.length + userPrompt.length) / 3.5);
 
     const llmStart = Date.now();
-    const aiResult = await this.generateWithAI(systemPrompt, userPrompt);
+    const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2048, 'documentation');
     const llmTimeSec = ((Date.now() - llmStart) / 1000).toFixed(2);
 
     const finalResult =
@@ -553,7 +564,7 @@ Every finding MUST be strictly grounded in the provided code evidence. Do not in
     ];
 
     try {
-      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 1800);
+      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 1800, 'debugging');
       const jsonMatch = aiResult?.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -635,17 +646,23 @@ Every finding MUST be strictly grounded in the provided code evidence. Do not in
     try {
       const commits = await GitHubService.fetchCommits(owner, name, 20);
       const fileChangeCounts: Record<string, number> = {};
+      const detailsBySha: Record<string, CommitSummary['files']> = {};
 
-      await Promise.allSettled(
-        commits.slice(0, 5).map(async (commit) => {
-          try {
-            const detail = await GitHubService.fetchCommitDetail(owner, name, commit.sha);
-            for (const file of detail.filesChanged || []) {
-              fileChangeCounts[file] = (fileChangeCounts[file] || 0) + 1;
-            }
-          } catch {}
-        })
-      );
+      // Fetch changed files for every commit (batched to limit concurrent GitHub calls)
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < commits.length; i += BATCH_SIZE) {
+        await Promise.allSettled(
+          commits.slice(i, i + BATCH_SIZE).map(async (commit) => {
+            try {
+              const detail = await GitHubService.fetchCommitDetail(owner, name, commit.sha);
+              detailsBySha[commit.sha] = detail.files;
+              for (const file of detail.files) {
+                fileChangeCounts[file.path] = (fileChangeCounts[file.path] || 0) + 1;
+              }
+            } catch {}
+          })
+        );
+      }
 
       const hotspots = Object.entries(fileChangeCounts)
         .map(([file, changes]) => ({ file, changes }))
@@ -653,15 +670,21 @@ Every finding MUST be strictly grounded in the provided code evidence. Do not in
         .slice(0, 10);
 
       return {
-        commits: commits.map((c) => ({
-          sha: c.sha.substring(0, 7),
-          message: c.message,
-          author: c.author,
-          date: new Date(c.date).toLocaleDateString(),
-          avatarUrl: c.avatarUrl,
-          url: c.url,
-        })),
-        hotspots: hotspots.length > 0 ? hotspots : [{ file: 'src/index.ts', changes: 1 }],
+        commits: commits.map((c) => {
+          const files = detailsBySha[c.sha] || [];
+          return {
+            sha: c.sha.substring(0, 7),
+            message: c.message,
+            author: c.author,
+            date: new Date(c.date).toLocaleDateString(),
+            avatarUrl: c.avatarUrl,
+            url: c.url,
+            files,
+            additions: files.reduce((sum, f) => sum + f.additions, 0),
+            deletions: files.reduce((sum, f) => sum + f.deletions, 0),
+          };
+        }),
+        hotspots,
       };
     } catch (err: any) {
       console.warn('[IntelligenceService] Commit history error:', err.message);
@@ -860,7 +883,7 @@ Time/space complexity and tricky edge cases (e.g. null inputs, concurrency).`;
 
     const userPrompt = `Explain this code from ${filePath}:\n\`\`\`\n${maskSecrets(snippet)}\n\`\`\``;
 
-    const aiResult = await this.generateWithAI(systemPrompt, userPrompt);
+    const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2048, 'coding');
     if (aiResult) return aiResult;
 
     return `### Code Explanation: \`${filePath}\`\n\n- **File**: \`${filePath}\`\n- **Length**: ${snippet.split('\n').length} lines\n\n*Configure \`GEMINI_API_KEY\` for AI-powered structured code explanation.*`;
@@ -979,7 +1002,7 @@ CRITICAL SECURITY RULES:
     const validFilePaths = new Set(citations.map((c) => c.filePath));
 
     try {
-      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2000);
+      const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2000, 'security');
       const jsonMatch = aiResult?.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -1140,7 +1163,7 @@ Source Code:
 ${content.slice(0, 12000)}
 \`\`\``;
 
-    const aiResult = await this.generateWithAI(systemPrompt, userPrompt);
+    const aiResult = await this.generateWithAI(systemPrompt, userPrompt, undefined, 2048, 'testing');
     const finalResult = aiResult || `// Test suite for ${filePath}\nimport { describe, it, expect } from '${framework}';\n\ndescribe('${filePath}', () => {\n  it('should be defined', () => {\n    expect(true).toBe(true);\n  });\n});`;
 
     AnalysisCacheService.set(repoId, commitSha, 'TESTS' as any, finalResult, `${filePath}:${framework}`);

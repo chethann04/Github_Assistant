@@ -18,6 +18,7 @@ interface Message {
   content: string;
   citations?: CitationData[];
   provider?: AIModelProvider | string;
+  status?: "PENDING" | "STREAMING" | "COMPLETED" | "FAILED";
 }
 
 interface Session {
@@ -112,6 +113,45 @@ const MODE_PROMPTS: Record<ChatMode, string[]> = {
   commits:      ["Summarize recent changes", "What major features were added recently?", "Any breaking changes in commits?", "Which files change most frequently?"],
 };
 
+function ChatCodeBlock({ language, value }: { language: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = () => {
+    navigator.clipboard.writeText(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="my-3 rounded-2xl overflow-hidden border border-slate-700/80 bg-slate-950 text-slate-100 shadow-lg shadow-black/10 text-left">
+      <div className="flex items-center justify-between px-4 py-2 bg-slate-900/90 border-b border-slate-800/80 text-[11px] font-mono text-slate-400">
+        <span className="font-semibold text-emerald-400 uppercase tracking-wider">{language || "code"}</span>
+        <button
+          onClick={onCopy}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-[11px] font-sans font-medium cursor-pointer"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3 h-3 text-emerald-400" />
+              <span className="text-emerald-400 font-semibold">Copied!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3 h-3" />
+              <span>Copy code</span>
+            </>
+          )}
+        </button>
+      </div>
+      <div className="p-4 overflow-x-auto text-xs font-mono leading-relaxed text-slate-200">
+        <pre className="!bg-transparent !p-0 !m-0">
+          <code>{value}</code>
+        </pre>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatInterface({
   repositoryId,
   repoName,
@@ -188,35 +228,110 @@ export default function ChatInterface({
     };
     fetchProviders();
   }, []);
+  // Track active EventSource / AbortController for live observation
+  const activeSseAbortRef = useRef<AbortController | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] = useState<number>(0);
+  const [jobStage, setJobStage] = useState<string>("");
 
-  // Load sessions
-  const loadSessions = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/chat/${repositoryId}/sessions`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(Array.isArray(data) ? data : []);
+  // Attach live event stream to an active ChatJob
+  const attachToJobEvents = useCallback((jobId: string, assistantMsgId?: string) => {
+    if (activeSseAbortRef.current) {
+      activeSseAbortRef.current.abort();
+    }
+
+    const abortController = new AbortController();
+    activeSseAbortRef.current = abortController;
+    setStreaming(true);
+    setActiveJobId(jobId);
+
+    const observeStream = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/chat/jobs/${jobId}/events`, {
+          credentials: "include",
+          signal: abortController.signal,
+        });
+
+        if (!response.body) return;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith("data:")) continue;
+            const jsonStr = line.replace(/^data:\s*/, "").trim();
+            if (!jsonStr || jsonStr === "[DONE]") continue;
+
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (event.type === "status" && event.data) {
+                setJobProgress(event.data.progress || 0);
+                setJobStage(event.data.currentStage || "");
+              } else if (event.type === "citations" && event.data?.citations) {
+                setMessages((prev) => prev.map((msg) =>
+                  (!assistantMsgId || msg.id === assistantMsgId || msg.role === "ASSISTANT")
+                    ? { ...msg, citations: event.data.citations }
+                    : msg
+                ));
+              } else if (event.type === "token" && event.data?.token !== undefined) {
+                setMessages((prev) => prev.map((msg) =>
+                  (!assistantMsgId || msg.id === assistantMsgId || msg.role === "ASSISTANT")
+                    ? { ...msg, content: (msg.content || "") + event.data.token, status: "STREAMING" }
+                    : msg
+                ));
+              } else if (event.type === "done") {
+                setStreaming(false);
+                setActiveJobId(null);
+                // Reload full persisted session messages from DB
+                if (event.data?.chatSessionId) {
+                  loadSession(event.data.chatSessionId);
+                }
+              } else if (event.type === "error") {
+                setStreaming(false);
+                setActiveJobId(null);
+                setMessages((prev) => prev.map((msg) =>
+                  (!assistantMsgId || msg.id === assistantMsgId)
+                    ? { ...msg, content: `⚠️ ${event.data?.message || "Failed to generate response."}`, status: "FAILED" }
+                    : msg
+                ));
+              }
+            } catch { /* ignore parse error */ }
+          }
+        }
+      } catch (err: any) {
+        if (err.name !== "AbortError") {
+          console.warn("[ChatInterface] SSE observation notice:", err.message);
+        }
+      } finally {
+        setStreaming(false);
+        setActiveJobId(null);
       }
-    } catch { /* silent */ }
-  }, [repositoryId]);
+    };
 
-  useEffect(() => { loadSessions(); }, [loadSessions]);
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+    observeStream();
+  }, []);
 
-  const startNewChat = async () => {
-    setActiveSessionId(null);
-    setMessages([{
-      id: "initial",
-      role: "ASSISTANT",
-      content: `Hello! I'm your AI assistant for **${repoName}**. I'm in **${MODES.find(m => m.id === mode)?.label}** mode. What would you like to know?`,
-    }]);
-    setInput("");
-  };
+  // Cleanup SSE observer on component unmount
+  useEffect(() => {
+    return () => {
+      if (activeSseAbortRef.current) {
+        activeSseAbortRef.current.abort();
+      }
+    };
+  }, []);
 
-  // Load existing session messages
-  const loadSession = async (sessionId: string) => {
+  // Load existing session messages from DB and check active jobs
+  const loadSession = useCallback(async (sessionId: string) => {
     try {
       const res = await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
         credentials: "include",
@@ -226,16 +341,84 @@ export default function ChatInterface({
       setActiveSessionId(sessionId);
       setMode((session.mode as ChatMode) || "repo");
       if (session.selectedFile) setSelectedFile(session.selectedFile);
-      setMessages(
-        session.messages?.map((m: any) => ({
-          id: m.id || Date.now().toString(),
-          role: m.role as "USER" | "ASSISTANT",
-          content: m.content,
-          citations: m.citations ? (typeof m.citations === 'string' ? JSON.parse(m.citations) : m.citations) : [],
-        })) || []
-      );
+
+      if (session.messages && Array.isArray(session.messages)) {
+        setMessages(
+          session.messages.map((m: any) => ({
+            id: m.id || Date.now().toString(),
+            role: m.role as "USER" | "ASSISTANT",
+            content: m.content || (m.status === "PENDING" || m.status === "STREAMING" ? "Generating response in background..." : ""),
+            citations: m.citations ? (typeof m.citations === 'string' ? JSON.parse(m.citations) : m.citations) : [],
+            status: m.status || "COMPLETED",
+          }))
+        );
+      }
       setShowSidebar(false);
+
+      // Check if there is an active job for this session
+      const activeRes = await fetch(`${API_BASE}/chat/active-jobs?repositoryId=${repositoryId}`, {
+        credentials: "include",
+      });
+      if (activeRes.ok) {
+        const activeJobs = await activeRes.json();
+        const sessionJob = activeJobs.find((j: any) => j.chatSessionId === sessionId);
+        if (sessionJob) {
+          attachToJobEvents(sessionJob.id, sessionJob.assistantMessageId);
+        }
+      }
     } catch { /* silent */ }
+  }, [repositoryId, attachToJobEvents]);
+
+  const initialMountRef = useRef<boolean>(false);
+
+  // Load sessions on mount and restore last active conversation only on initial mount
+  const loadSessions = useCallback(async (shouldRestoreLast = false) => {
+    try {
+      const res = await fetch(`${API_BASE}/chat/${repositoryId}/sessions`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const sessionList = Array.isArray(data) ? data : [];
+        setSessions(sessionList);
+
+        // If explicitly requested on initial mount, restore the most recent session
+        if (shouldRestoreLast && sessionList.length > 0) {
+          loadSession(sessionList[0].id);
+        }
+      }
+    } catch { /* silent */ }
+  }, [repositoryId, loadSession]);
+
+  useEffect(() => {
+    if (!initialMountRef.current) {
+      initialMountRef.current = true;
+      loadSessions(true);
+    }
+  }, [loadSessions]);
+
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  const startNewChat = () => {
+    if (activeSseAbortRef.current) {
+      activeSseAbortRef.current.abort();
+    }
+    setActiveSessionId(null);
+    setStreaming(false);
+    setActiveJobId(null);
+    setJobProgress(0);
+    setJobStage("");
+    setMessages([{
+      id: "initial",
+      role: "ASSISTANT",
+      content: `Hello! I'm your AI assistant for **${repoName}**. I'm in **${MODES.find(m => m.id === mode)?.label}** mode. What would you like to know?`,
+      status: "COMPLETED",
+    }]);
+    setInput("");
+    setShowSidebar(false);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
   };
 
   const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
@@ -276,6 +459,7 @@ export default function ChatInterface({
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
+  // Asynchronous background message submission
   const handleSendMessage = async (text: string) => {
     const query = text.trim();
     if (!query || streaming) return;
@@ -285,25 +469,27 @@ export default function ChatInterface({
         id: Date.now().toString(),
         role: "ASSISTANT",
         content: "⚠️ Please select a file first using the file dropdown to use File Chat mode.",
+        status: "COMPLETED",
       }]);
       return;
     }
 
     setInput("");
-    const userMsgId = Date.now().toString();
-    const assistantMsgId = (Date.now() + 1).toString();
+    const tempUserMsgId = Date.now().toString();
+    const tempAssistantMsgId = (Date.now() + 1).toString();
 
+    // Optimistic UI updates
     setMessages((prev) => [
       ...prev,
-      { id: userMsgId, role: "USER", content: query },
-      { id: assistantMsgId, role: "ASSISTANT", content: "", citations: [], provider: selectedModel },
+      { id: tempUserMsgId, role: "USER", content: query, status: "COMPLETED" },
+      { id: tempAssistantMsgId, role: "ASSISTANT", content: "", citations: [], status: "PENDING" },
     ]);
 
     setStreaming(true);
-    abortRef.current = false;
 
     try {
-      const response = await fetch(`${API_BASE}/chat/stream`, {
+      // POST to background ChatJob endpoint (returns in < 200ms)
+      const res = await fetch(`${API_BASE}/chat/jobs`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -317,65 +503,33 @@ export default function ChatInterface({
         }),
       });
 
-      if (!response.body) throw new Error("ReadableStream not supported.");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-
-      while (true) {
-        if (abortRef.current) {
-          try { await reader.cancel(); } catch {}
-          break;
-        }
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || "";
-
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line.startsWith("data:")) continue;
-          const jsonStr = line.replace(/^data:\s*/, "").trim();
-          if (!jsonStr || jsonStr === "[DONE]") continue;
-
-          try {
-            const event = JSON.parse(jsonStr);
-
-            if (event.type === "sessionId" && event.data?.sessionId) {
-              setActiveSessionId(event.data.sessionId);
-              setTimeout(() => loadSessions(), 500);
-            } else if (event.type === "provider" && event.data?.provider) {
-              setMessages((prev) => prev.map((msg) =>
-                msg.id === assistantMsgId ? { ...msg, provider: event.data.provider } : msg
-              ));
-            } else if (event.type === "citations" && event.data?.citations) {
-              setMessages((prev) => prev.map((msg) =>
-                msg.id === assistantMsgId ? { ...msg, citations: event.data.citations } : msg
-              ));
-            } else if (event.type === "token" && event.data?.token !== undefined) {
-              setMessages((prev) => prev.map((msg) =>
-                msg.id === assistantMsgId ? { ...msg, content: (msg.content || "") + event.data.token } : msg
-              ));
-            } else if (event.type === "error" && event.data?.message) {
-              setMessages((prev) => prev.map((msg) =>
-                msg.id === assistantMsgId ? { ...msg, content: (msg.content || "") + `\n\n*${event.data.message}*` } : msg
-              ));
-            }
-          } catch { /* pass */ }
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to initialize background chat job");
       }
+
+      const jobData = await res.json();
+      const { jobId, chatSessionId, assistantMessageId } = jobData;
+
+      if (chatSessionId && chatSessionId !== activeSessionId) {
+        setActiveSessionId(chatSessionId);
+        loadSessions();
+      }
+
+      // Map temp assistant message ID to DB record ID
+      if (assistantMessageId) {
+        setMessages((prev) => prev.map((m) => m.id === tempAssistantMsgId ? { ...m, id: assistantMessageId } : m));
+      }
+
+      // Attach live SSE listener to background job
+      attachToJobEvents(jobId, assistantMessageId || tempAssistantMsgId);
     } catch (err: any) {
+      setStreaming(false);
       setMessages((prev) => prev.map((msg) =>
-        msg.id === assistantMsgId
-          ? { ...msg, content: `Error: ${err.message || "Failed to stream response."}` }
+        msg.id === tempAssistantMsgId
+          ? { ...msg, content: `Error: ${err.message || "Failed to submit chat message."}`, status: "FAILED" }
           : msg
       ));
-    } finally {
-      setStreaming(false);
-      setTimeout(() => loadSessions(), 1000);
     }
   };
 
@@ -497,93 +651,13 @@ export default function ChatInterface({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {/* AI Model Selector Dropdown */}
-            <div className="relative" ref={modelDropdownRef}>
-              {(() => {
-                const currentAiModels = getAiModelsList(availableProviders.isNvidia, availableProviders.openaiModel);
-                const currentModelObj = currentAiModels.find(m => m.id === selectedModel) || currentAiModels[0];
-                return (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/90 hover:bg-white border border-slate-300/80 hover:border-slate-400 text-xs font-semibold text-slate-800 shadow-2xs transition-all"
-                      title="Select AI Model"
-                    >
-                      {selectedModel === "dual" ? (
-                        <span className="flex items-center gap-1.5 text-purple-700 font-bold">
-                          <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                          <span className="hidden sm:inline">Dual-AI</span>
-                          <span className="text-[10px] px-1.5 py-0.2 bg-purple-100 rounded-md text-purple-800 font-mono">
-                            {currentModelObj.badge}
-                          </span>
-                        </span>
-                      ) : selectedModel === "openai" ? (
-                        <span className="flex items-center gap-1.5 text-emerald-700 font-bold">
-                          <Cpu className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>{currentModelObj.label}</span>
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1.5 text-blue-700 font-bold">
-                          <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Gemini 2.5 Flash</span>
-                        </span>
-                      )}
-                      <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isModelDropdownOpen ? "rotate-180 text-slate-700" : ""}`} />
-                    </button>
-
-                    {isModelDropdownOpen && (
-                      <div className="absolute right-0 top-full mt-2 w-72 rounded-2xl glass-dropdown border border-slate-200/90 shadow-2xl p-2.5 z-50 animate-in fade-in zoom-in-95 duration-150">
-                        <div className="px-2.5 py-1.5 mb-1.5 border-b border-slate-100 flex items-center justify-between">
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Select AI Engine</p>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">Active</span>
-                        </div>
-                        <div className="space-y-1.5">
-                          {currentAiModels.map((m) => {
-                            const isChosen = selectedModel === m.id;
-                            return (
-                              <button
-                                key={m.id}
-                                onClick={() => {
-                                  setSelectedModel(m.id);
-                                  setIsModelDropdownOpen(false);
-                                }}
-                                className={`w-full flex flex-col items-start gap-1 p-2.5 rounded-xl text-left transition-all ${
-                                  isChosen
-                                    ? "bg-slate-900 text-white shadow-xs"
-                                    : "hover:bg-slate-100/90 text-slate-800 border border-transparent"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between w-full">
-                                  <span className={`text-xs font-bold ${isChosen ? "text-white" : "text-slate-900"}`}>
-                                    {m.label}
-                                  </span>
-                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium ${
-                                    isChosen ? "bg-white/20 text-white" : m.pillColor
-                                  }`}>
-                                    {m.badge}
-                                  </span>
-                                </div>
-                                <p className={`text-[11px] leading-tight ${isChosen ? "text-slate-300" : "text-slate-500"}`}>
-                                  {m.description}
-                                </p>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-
             <button
               onClick={startNewChat}
-              className="p-2 rounded-xl hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200/80 transition-all shadow-2xs"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200/80 transition-all shadow-2xs text-xs font-semibold"
               title="New chat"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3.5 h-3.5" />
+              <span>New Chat</span>
             </button>
           </div>
         </div>
@@ -702,22 +776,12 @@ export default function ChatInterface({
                     ? "bg-slate-900 text-white rounded-tr-none shadow-slate-900/20 border border-slate-800"
                     : "bg-white/90 backdrop-blur-md text-slate-800 border border-slate-200/90 rounded-tl-none shadow-slate-900/5"
                 }`}>
-                  {/* Assistant Model Badge */}
-                  {!isUser && msg.provider && (
+                  {/* Assistant Badge */}
+                  {!isUser && (
                     <div className="mb-2 flex items-center gap-1.5">
-                      {msg.provider === "dual" ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 shadow-2xs">
-                          <Sparkles className="w-2.5 h-2.5 text-purple-600" /> Dual-AI ({availableProviders.isNvidia ? "Gemini + GLM Verified" : "Gemini + GPT-4o Verified"})
-                        </span>
-                      ) : msg.provider === "openai" ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
-                          <Cpu className="w-2.5 h-2.5 text-emerald-600" /> {availableProviders.isNvidia ? `GLM (${(availableProviders.openaiModel || "GLM-5.2").split("/").pop()})` : "ChatGPT (GPT-4o)"}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
-                          <Sparkles className="w-2.5 h-2.5 text-blue-600" /> Gemini 2.5 Flash
-                        </span>
-                      )}
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200/80 shadow-2xs">
+                        <Sparkles className="w-2.5 h-2.5 text-indigo-600" /> AI Assistant
+                      </span>
                     </div>
                   )}
 
@@ -735,14 +799,87 @@ export default function ChatInterface({
                     </button>
                   )}
 
+                  {/* Message Content & Background Processing Indicators */}
                   {msg.content ? (
                     <div className={`prose prose-sm max-w-none pr-6 ${isUser ? "prose-invert text-white" : "prose-slate text-slate-800"}`}>
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown
+                        components={{
+                          code({ node, inline, className, children, ...props }: any) {
+                            const match = /language-(\w+)/.exec(className || "");
+                            const codeString = String(children).replace(/\n$/, "");
+                            if (!inline && (match || codeString.includes("\n"))) {
+                              return (
+                                <ChatCodeBlock
+                                  language={match ? match[1] : ""}
+                                  value={codeString}
+                                />
+                              );
+                            }
+                            return (
+                              <code
+                                className={
+                                  isUser
+                                    ? "bg-slate-800 text-emerald-300 px-1.5 py-0.5 rounded font-mono text-[12px]"
+                                    : "bg-slate-100 text-emerald-800 border border-slate-200 px-1.5 py-0.5 rounded font-mono text-[12px]"
+                                }
+                                {...props}
+                              >
+                                {children}
+                              </code>
+                            );
+                          },
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 text-slate-500 py-1">
-                      <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                      <span>Searching vectors & generating response...</span>
+                    <div className="flex items-center gap-2.5 text-slate-600 py-1.5 font-medium">
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-600 shrink-0" />
+                      <span className="text-xs">
+                        {jobStage || "Generating response in background..."}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Failed Generation Retry */}
+                  {!isUser && msg.status === "FAILED" && (
+                    <div className="mt-2.5 pt-2 border-t border-red-100 flex items-center justify-between">
+                      <span className="text-xs text-red-600 font-medium">Generation encountered an error.</span>
+                      <button
+                        onClick={() => {
+                          // Find last user message before this assistant message
+                          const msgIdx = messages.findIndex((m) => m.id === msg.id);
+                          const lastUserMsg = msgIdx > 0 ? messages[msgIdx - 1] : null;
+                          if (lastUserMsg && lastUserMsg.content) {
+                            handleSendMessage(lastUserMsg.content);
+                          }
+                        }}
+                        className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>Retry</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Quick Mode Prompt Suggestions for First Assistant Message */}
+                  {!isUser && msg.id === "initial" && (
+                    <div className="mt-3.5 pt-3 border-t border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Sparkles className="w-3 h-3 text-emerald-600" /> Suggested Prompts
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(MODE_PROMPTS[mode] || []).slice(0, 5).map((promptText, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleSendMessage(promptText)}
+                            className="text-[11px] px-2.5 py-1 rounded-full bg-slate-50 hover:bg-emerald-50 hover:text-emerald-900 hover:border-emerald-300 text-slate-700 border border-slate-200/90 transition-all font-medium flex items-center gap-1 shadow-2xs group cursor-pointer"
+                          >
+                            <span>{promptText}</span>
+                            <ArrowRight className="w-2.5 h-2.5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 

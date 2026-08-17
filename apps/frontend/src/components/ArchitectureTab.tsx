@@ -87,35 +87,42 @@ const ARCH_NODES: ArchNode[] = [
   },
 ];
 
+import { useAnalysisJob } from "@/hooks/useAnalysisJob";
+import AnalysisProgressBanner from "@/components/AnalysisProgressBanner";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
 export default function ArchitectureTab({ repositoryId }: ArchitectureTabProps) {
-  const [architecture, setArchitecture] = useState<string>("");
   const [files, setFiles] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [copiedMermaid, setCopiedMermaid] = useState(false);
   const [activeView, setActiveView] = useState<"interactive" | "report" | "diagram">("interactive");
   const [selectedNodeId, setSelectedNodeId] = useState<string>("frontend");
 
-  const fetchArchitecture = async () => {
-    setLoading(true);
-    try {
-      const [archRes, filesRes] = await Promise.all([
-        axios.post(`${API_BASE}/intelligence/${repositoryId}/architecture`),
-        axios.get(`${API_BASE}/repos/${repositoryId}/files`),
-      ]);
-      setArchitecture(archRes.data.architecture);
-      setFiles(filesRes.data || []);
-    } catch (err) {
-      console.error("Failed to generate architecture:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    result,
+    status,
+    progress,
+    currentStage,
+    error,
+    isStaleCommit,
+    isRunning,
+    triggerJob,
+    cancelJob,
+    retryJob,
+  } = useAnalysisJob<{ architecture: string }>({
+    repositoryId,
+    type: "ARCHITECTURE",
+    autoRunIfNone: true,
+  });
+
+  const architecture = result?.architecture || "";
 
   useEffect(() => {
-    fetchArchitecture();
+    axios
+      .get(`${API_BASE}/repos/${repositoryId}/files`, { withCredentials: true })
+      .then((res) => setFiles(res.data || []))
+      .catch(() => {});
   }, [repositoryId]);
 
   const handleCopy = () => {
@@ -191,25 +198,31 @@ export default function ArchitectureTab({ repositoryId }: ArchitectureTabProps) 
           </div>
 
           <button
-            onClick={fetchArchitecture}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer"
+            onClick={() => triggerJob(true)}
+            disabled={isRunning}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer disabled:opacity-50"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-            <span>Regenerate</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? "animate-spin" : ""}`} />
+            <span>Regenerate Architecture</span>
           </button>
         </div>
       </div>
 
-      {loading ? (
-        <div className="py-24 flex flex-col items-center justify-center text-center text-slate-500 gap-3">
-          <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-medium">
-            Synthesizing architectural layers, data flows, and module boundaries...
-          </span>
-        </div>
-      ) : (
-        <div className="mt-6">
+      {/* Background Analysis Progress & Stage Banner */}
+      <div className="mt-4">
+        <AnalysisProgressBanner
+          status={status}
+          progress={progress}
+          currentStage={currentStage}
+          error={error}
+          isStaleCommit={isStaleCommit}
+          onCancel={cancelJob}
+          onRetry={retryJob}
+          onRunLatest={() => triggerJob(true)}
+        />
+      </div>
+
+      <div className="mt-6">
           {/* 1. INTERACTIVE COMPONENT MAP VIEW */}
           {activeView === "interactive" && (
             <div className="space-y-6">
@@ -363,7 +376,6 @@ export default function ArchitectureTab({ repositoryId }: ArchitectureTabProps) 
             </div>
           )}
         </div>
-      )}
     </div>
   );
 }

@@ -126,7 +126,10 @@ router.get('/', async (req: Request, res: Response) => {
     return res.json(repos);
   } catch (err: any) {
     console.error('[ReposRoute] List error:', err.message);
-    return res.status(500).json({ error: 'Failed to load repositories' });
+    return res.status(500).json({
+      error: 'Failed to load repositories',
+      details: err.message || 'Database connection error',
+    });
   }
 });
 

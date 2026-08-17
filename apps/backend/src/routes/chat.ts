@@ -1,17 +1,243 @@
 import { Router, Request, Response } from 'express';
 import { RAGService, ChatMode } from '../services/rag.service.js';
 import { LLMService, LLMProviderType } from '../services/llm.service.js';
+import { ChatQueueService } from '../queues/chat-queue.service.js';
 import prisma from '../config/prisma.js';
 
 const router = Router();
 
-// GET /api/v1/chat/providers — check available AI providers (Gemini, OpenAI, Dual)
+// GET /api/v1/chat/providers — check available AI providers
 router.get('/providers', (req: Request, res: Response) => {
   const providers = LLMService.getAvailableProviders();
   res.json(providers);
 });
 
-// POST /api/v1/chat/stream — SSE streaming chat (enforces session ownership & multi-model support)
+// POST /api/v1/chat/jobs — Asynchronous background chat generation endpoint
+// Returns 202 Accepted immediately with jobId. Unmounting frontend does NOT stop generation.
+router.post('/jobs', async (req: Request, res: Response) => {
+  try {
+    const { query, repositoryId, chatSessionId, mode = 'repo', selectedFilePath, provider } = req.body;
+    const sessionId = req.anonymousSession.id;
+
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'A valid non-empty query is required.' });
+    }
+    if (!repositoryId || typeof repositoryId !== 'string') {
+      return res.status(400).json({ error: 'repositoryId is required.' });
+    }
+
+    // Verify repository belongs to current anonymous session
+    const repo = await prisma.repository.findFirst({
+      where: { id: repositoryId, sessionId },
+    });
+    if (!repo) {
+      return res.status(404).json({ error: 'Repository not found' });
+    }
+
+    const validModes: ChatMode[] = ['repo', 'file', 'debug', 'architecture', 'commits'];
+    const chatMode: ChatMode = validModes.includes(mode) ? mode : 'repo';
+    const selectedProvider: LLMProviderType | undefined = ['gemini', 'openai', 'nvidia', 'openrouter', 'dual', 'auto'].includes(provider)
+      ? provider
+      : undefined;
+
+    // 1. Resolve or create ChatSession
+    let sessionRecord = null;
+    if (chatSessionId) {
+      sessionRecord = await prisma.chatSession.findFirst({
+        where: { id: chatSessionId, repositoryId, sessionId },
+      });
+    }
+
+    if (!sessionRecord) {
+      sessionRecord = await prisma.chatSession.create({
+        data: {
+          sessionId,
+          repositoryId,
+          title: query.trim().slice(0, 50) || 'New Chat',
+          mode: chatMode,
+          selectedFile: selectedFilePath || null,
+        },
+      });
+    }
+
+    // 2. Persist User Message immediately
+    const userMessage = await prisma.message.create({
+      data: {
+        chatSessionId: sessionRecord.id,
+        role: 'USER',
+        content: query.trim(),
+        status: 'COMPLETED',
+      },
+    });
+
+    // 3. Persist Assistant Message placeholder
+    const assistantMessage = await prisma.message.create({
+      data: {
+        chatSessionId: sessionRecord.id,
+        role: 'ASSISTANT',
+        content: '',
+        status: 'PENDING',
+      },
+    });
+
+    // 4. Create ChatJob record in DB
+    const chatJob = await (prisma as any).chatJob.create({
+      data: {
+        sessionId,
+        repositoryId,
+        chatSessionId: sessionRecord.id,
+        userMessageId: userMessage.id,
+        assistantMessageId: assistantMessage.id,
+        query: query.trim(),
+        mode: chatMode,
+        selectedFilePath: selectedFilePath || null,
+        provider: selectedProvider || null,
+        status: 'QUEUED',
+        progress: 0,
+        currentStage: 'Queued for processing',
+      },
+    });
+
+    // 5. Enqueue for background processing
+    ChatQueueService.enqueue({
+      jobId: chatJob.id,
+      sessionId,
+      repositoryId,
+      chatSessionId: sessionRecord.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: assistantMessage.id,
+      query: query.trim(),
+      mode: chatMode,
+      selectedFilePath: selectedFilePath || null,
+      provider: selectedProvider,
+    });
+
+    // Return immediately to frontend (< 200ms)
+    return res.status(202).json({
+      jobId: chatJob.id,
+      chatSessionId: sessionRecord.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: assistantMessage.id,
+      status: 'QUEUED',
+    });
+  } catch (err: any) {
+    console.error('[ChatRoute] Job creation error:', err.message);
+    return res.status(500).json({ error: err.message || 'Failed to initialize chat job' });
+  }
+});
+
+// GET /api/v1/chat/jobs/:jobId — Get status and result of a specific ChatJob
+router.get('/jobs/:jobId', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const { jobId } = req.params;
+
+    const job = await (prisma as any).chatJob.findFirst({
+      where: { id: jobId, sessionId },
+      include: {
+        chatSession: {
+          include: {
+            messages: {
+              where: { role: 'ASSISTANT' },
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    if (!job) {
+      return res.status(404).json({ error: 'Chat job not found' });
+    }
+
+    return res.json({
+      id: job.id,
+      status: job.status,
+      progress: job.progress,
+      currentStage: job.currentStage,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      chatSessionId: job.chatSessionId,
+      assistantMessage: job.chatSession?.messages?.[0] || null,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/chat/active-jobs — List any currently active (QUEUED or RUNNING) chat jobs
+router.get('/active-jobs', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.anonymousSession.id;
+    const { repositoryId } = req.query;
+
+    const activeJobs = await (prisma as any).chatJob.findMany({
+      where: {
+        sessionId,
+        status: { in: ['QUEUED', 'RUNNING'] },
+        ...(repositoryId && typeof repositoryId === 'string' ? { repositoryId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+
+    return res.json(activeJobs);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/v1/chat/jobs/:jobId/events — SSE Stream for live generation updates
+// Disconnecting this SSE stream does NOT stop the underlying background ChatJob.
+router.get('/jobs/:jobId/events', async (req: Request, res: Response) => {
+  const sessionId = req.anonymousSession.id;
+  const { jobId } = req.params;
+
+  const job = await (prisma as any).chatJob.findFirst({
+    where: { id: jobId, sessionId },
+  });
+
+  if (!job) {
+    return res.status(404).json({ error: 'Chat job not found' });
+  }
+
+  // SSE setup
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders();
+
+  // If already completed or failed, emit current state and exit
+  if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+    res.write(`data: ${JSON.stringify({ type: 'status', data: { status: job.status, progress: job.progress, currentStage: job.currentStage } })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+
+  // Subscribe to live events from ChatQueueService
+  const unsubscribe = ChatQueueService.subscribe(jobId, (event) => {
+    try {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (typeof (res as any).flush === 'function') (res as any).flush();
+      if (event.type === 'done' || event.type === 'error') {
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
+    } catch {}
+  });
+
+  req.on('close', () => {
+    unsubscribe();
+  });
+});
+
+// POST /api/v1/chat/stream — Direct SSE streaming chat fallback
 router.post('/stream', async (req: Request, res: Response) => {
   const { query, repositoryId, chatSessionId, mode = 'repo', selectedFilePath, provider } = req.body;
   const sessionId = req.anonymousSession.id;
@@ -43,7 +269,7 @@ router.post('/stream', async (req: Request, res: Response) => {
 
   const validModes: ChatMode[] = ['repo', 'file', 'debug', 'architecture', 'commits'];
   const chatMode: ChatMode = validModes.includes(mode) ? mode : 'repo';
-  const selectedProvider: LLMProviderType | undefined = ['gemini', 'openai', 'dual', 'auto'].includes(provider)
+  const selectedProvider: LLMProviderType | undefined = ['gemini', 'openai', 'nvidia', 'openrouter', 'dual', 'auto'].includes(provider)
     ? provider
     : undefined;
 

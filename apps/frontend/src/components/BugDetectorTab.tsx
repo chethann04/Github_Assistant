@@ -13,10 +13,11 @@ import {
   Flame,
   Info,
   Layers,
-  Wrench,
   HelpCircle,
+  Wrench,
 } from "lucide-react";
-import axios from "axios";
+import { useAnalysisJob } from "@/hooks/useAnalysisJob";
+import AnalysisProgressBanner from "@/components/AnalysisProgressBanner";
 
 export type CodeReviewSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO";
 export type CodeReviewCategory =
@@ -49,40 +50,38 @@ interface BugDetectorTabProps {
   repositoryId: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
-
-const CATEGORIES: Array<{ id: CodeReviewCategory; label: string }> = [
-  { id: "ALL", label: "All Findings" },
-  { id: "BUG", label: "Bugs & Logic" },
-  { id: "RELIABILITY", label: "Reliability" },
+const CATEGORIES: Array<{ id: CodeReviewCategory | "ALL"; label: string }> = [
+  { id: "ALL", label: "All Categories" },
+  { id: "RELIABILITY", label: "Reliability & Edge Cases" },
   { id: "ERROR_HANDLING", label: "Error Handling" },
   { id: "PERFORMANCE", label: "Performance" },
   { id: "MAINTAINABILITY", label: "Maintainability" },
-  { id: "BAD_PRACTICE", label: "Bad Practices" },
   { id: "ARCHITECTURE", label: "Architecture" },
+  { id: "BAD_PRACTICE", label: "Anti-Patterns" },
 ];
 
 export default function BugDetectorTab({ repositoryId }: BugDetectorTabProps) {
-  const [bugs, setBugs] = useState<BugIssue[]>([]);
-  const [loading, setLoading] = useState(true);
   const [copiedPatchId, setCopiedPatchId] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<CodeReviewCategory>("ALL");
 
-  const fetchBugs = async () => {
-    setLoading(true);
-    try {
-      const response = await axios.post(`${API_BASE}/intelligence/${repositoryId}/bugs`);
-      setBugs(response.data);
-    } catch (err) {
-      console.error("Failed to scan bugs:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    result,
+    status,
+    progress,
+    currentStage,
+    error,
+    isStaleCommit,
+    isRunning,
+    triggerJob,
+    cancelJob,
+    retryJob,
+  } = useAnalysisJob<BugIssue[]>({
+    repositoryId,
+    type: "CODE_REVIEW",
+    autoRunIfNone: true,
+  });
 
-  useEffect(() => {
-    fetchBugs();
-  }, [repositoryId]);
+  const bugs: BugIssue[] = Array.isArray(result) ? result : [];
 
   const handleCopyPatch = (patch: string, bugId: string) => {
     navigator.clipboard.writeText(patch);
@@ -117,17 +116,31 @@ export default function BugDetectorTab({ repositoryId }: BugDetectorTabProps) {
         </div>
 
         <button
-          onClick={fetchBugs}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer"
+          onClick={() => triggerJob(true)}
+          disabled={isRunning}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          <span>Rescan Repository</span>
+          <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? "animate-spin" : ""}`} />
+          <span>Rescan Code Review</span>
         </button>
       </div>
 
+      {/* Background Analysis Progress & Stage Banner */}
+      <div className="mt-4">
+        <AnalysisProgressBanner
+          status={status}
+          progress={progress}
+          currentStage={currentStage}
+          error={error}
+          isStaleCommit={isStaleCommit}
+          onCancel={cancelJob}
+          onRetry={retryJob}
+          onRunLatest={() => triggerJob(true)}
+        />
+      </div>
+
       {/* Metric Counters Header */}
-      {!loading && bugs.length > 0 && (
+      {bugs.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-6">
           <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-950 flex items-center justify-between">
             <div>
@@ -161,7 +174,7 @@ export default function BugDetectorTab({ repositoryId }: BugDetectorTabProps) {
       )}
 
       {/* Category Filter Pills */}
-      {!loading && bugs.length > 0 && (
+      {bugs.length > 0 && (
         <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-6 text-xs scrollbar-none">
           {CATEGORIES.map((cat) => {
             const isSelected = selectedCategory === cat.id;
@@ -188,14 +201,7 @@ export default function BugDetectorTab({ repositoryId }: BugDetectorTabProps) {
 
       {/* Findings List */}
       <div>
-        {loading ? (
-          <div className="py-20 flex flex-col items-center justify-center text-center text-slate-500 gap-3">
-            <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm font-medium">
-              Scanning logical chunks for bugs, anti-patterns, maintainability, and reliability defects...
-            </span>
-          </div>
-        ) : filteredBugs.length === 0 ? (
+        {filteredBugs.length === 0 ? (
           <div className="text-center py-16 text-slate-500">
             <CheckCircle className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
             <h4 className="text-slate-900 font-semibold">No issues found in this category</h4>

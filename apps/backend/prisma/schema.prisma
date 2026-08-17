@@ -14,7 +14,9 @@ model AnonymousSession {
   lastSeenAt   DateTime      @updatedAt
   repositories Repository[]
   indexJobs    IndexJob[]
+  analysisJobs AnalysisJob[]
   chatSessions ChatSession[]
+  chatJobs     ChatJob[]
 }
 
 model Repository {
@@ -40,7 +42,9 @@ model Repository {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   indexJobs        IndexJob[]
+  analysisJobs     AnalysisJob[]
   chatSessions     ChatSession[]
+  chatJobs         ChatJob[]
 
   @@unique([sessionId, url])
   @@index([sessionId])
@@ -81,6 +85,7 @@ model ChatSession {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   messages     Message[]
+  chatJobs     ChatJob[]
 
   @@index([sessionId])
   @@index([repositoryId])
@@ -90,13 +95,72 @@ model Message {
   id            String      @id @default(uuid())
   chatSessionId String
   chatSession   ChatSession @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
-  role          String
+  role          String      // 'USER' | 'ASSISTANT'
   content       String
+  status        String      @default("COMPLETED") // 'PENDING' | 'STREAMING' | 'COMPLETED' | 'FAILED'
   citations     String?
   metadata      String?
   createdAt     DateTime    @default(now())
 
   @@index([chatSessionId])
 }
+
+model ChatJob {
+  id                 String           @id @default(uuid())
+  sessionId          String
+  session            AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  repositoryId       String
+  repository         Repository       @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  chatSessionId      String
+  chatSession        ChatSession      @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  userMessageId      String
+  assistantMessageId String?
+  query              String
+  mode               String           @default("repo")
+  selectedFilePath   String?
+  provider           String?
+  status             String           @default("QUEUED") // 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+  progress           Int              @default(0)
+  currentStage       String?
+  error              String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([sessionId])
+  @@index([repositoryId])
+  @@index([chatSessionId])
+  @@index([status])
+}
+
+model AnalysisJob {
+  id           String           @id @default(uuid())
+  sessionId    String
+  session      AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  repositoryId String
+  repository   Repository       @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  type         String           // 'SECURITY', 'BUGS', 'DOCUMENTATION', 'ARCHITECTURE', 'IMPACT', 'DEPENDENCY', 'TESTS'
+  targetParam  String?          // e.g. 'readme'|'api'|'docstrings' or filePath or framework
+  params       Json?
+  status       String           @default("QUEUED") // 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'
+  progress     Int              @default(0)
+  currentStage String?
+  error        String?
+  errorMessage String?
+  commitSha    String?
+  result       Json?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([sessionId])
+  @@index([repositoryId])
+  @@index([repositoryId, type])
+  @@index([repositoryId, type, commitSha])
+  @@index([status])
+}
+
 
 

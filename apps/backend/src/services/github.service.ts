@@ -22,6 +22,14 @@ export interface RepoFile {
   sha: string;
 }
 
+export interface CommitFileChange {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  previousPath?: string;
+}
+
 export interface CommitInfo {
   sha: string;
   message: string;
@@ -83,6 +91,11 @@ const SECRET_FILE_PATTERNS = [
 const MAX_FILE_SIZE = 400 * 1024; // 400KB
 
 export class GitHubService {
+  private static treeCache = new Map<string, { files: RepoFile[]; expiresAt: number }>();
+  private static contentCache = new Map<string, { content: string; expiresAt: number }>();
+  private static metaCache = new Map<string, { meta: RepoInfo; expiresAt: number }>();
+  private static readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
   private static getHeaders() {
     const headers: Record<string, string> = {
       'Accept': 'application/vnd.github.v3+json',
@@ -104,6 +117,12 @@ export class GitHubService {
   }
 
   public static async fetchRepoMetadata(owner: string, name: string): Promise<RepoInfo> {
+    const cacheKey = `${owner}/${name}`;
+    const cached = this.metaCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.meta;
+    }
+
     const apiUrl = `https://api.github.com/repos/${owner}/${name}`;
     try {
       const response = await axios.get(apiUrl, { headers: this.getHeaders(), timeout: 15000 });
@@ -121,7 +140,7 @@ export class GitHubService {
         latestCommit = defaultBranch;
       }
 
-      return {
+      const meta: RepoInfo = {
         owner: data.owner?.login || owner,
         name: data.name || name,
         url: data.html_url || `https://github.com/${owner}/${name}`,
@@ -134,6 +153,9 @@ export class GitHubService {
         topics: Array.isArray(data.topics) ? data.topics : [],
         visibility: data.visibility || 'public',
       };
+
+      this.metaCache.set(cacheKey, { meta, expiresAt: Date.now() + this.CACHE_TTL_MS });
+      return meta;
     } catch (err: any) {
       if (err.response?.status === 404) {
         throw new Error(`Repository ${owner}/${name} not found or is private. Check the URL and permissions.`);
@@ -148,6 +170,12 @@ export class GitHubService {
   }
 
   public static async fetchRepoFileTree(owner: string, name: string, commitSha: string): Promise<RepoFile[]> {
+    const cacheKey = `${owner}/${name}/${commitSha}`;
+    const cached = this.treeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.files;
+    }
+
     const apiUrl = `https://api.github.com/repos/${owner}/${name}/git/trees/${commitSha}?recursive=1`;
     try {
       const response = await axios.get(apiUrl, { headers: this.getHeaders(), timeout: 30000 });
@@ -190,6 +218,7 @@ export class GitHubService {
         codeFiles.push({ path: filePath, size: item.size || 0, sha: item.sha });
       }
 
+      this.treeCache.set(cacheKey, { files: codeFiles, expiresAt: Date.now() + this.CACHE_TTL_MS });
       return codeFiles;
     } catch (err: any) {
       if (err.response?.status === 409) {
@@ -205,6 +234,12 @@ export class GitHubService {
     commitSha: string,
     filePath: string
   ): Promise<string> {
+    const cacheKey = `${owner}/${name}/${commitSha}/${filePath}`;
+    const cached = this.contentCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.content;
+    }
+
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${name}/${commitSha}/${filePath}`;
     try {
       const response = await axios.get(rawUrl, {
@@ -219,7 +254,9 @@ export class GitHubService {
         throw new Error(`File appears to be binary: ${filePath}`);
       }
 
-      return sanitizeUnicodeText(content, filePath);
+      const sanitized = sanitizeUnicodeText(content, filePath);
+      this.contentCache.set(cacheKey, { content: sanitized, expiresAt: Date.now() + this.CACHE_TTL_MS });
+      return sanitized;
     } catch (err: any) {
       if (err.message.includes('binary')) throw err;
 
@@ -232,7 +269,9 @@ export class GitHubService {
           if (this.isBinaryContent(raw)) {
             throw new Error(`File appears to be binary: ${filePath}`);
           }
-          return sanitizeUnicodeText(raw, filePath);
+          const sanitized = sanitizeUnicodeText(raw, filePath);
+          this.contentCache.set(cacheKey, { content: sanitized, expiresAt: Date.now() + this.CACHE_TTL_MS });
+          return sanitized;
         }
       } catch {
         // ignore
@@ -270,13 +309,20 @@ export class GitHubService {
     owner: string,
     name: string,
     sha: string
-  ): Promise<{ commit: CommitInfo; filesChanged: string[] }> {
+  ): Promise<{ commit: CommitInfo; filesChanged: string[]; files: CommitFileChange[] }> {
     try {
       const response = await axios.get(
         `https://api.github.com/repos/${owner}/${name}/commits/${sha}`,
         { headers: this.getHeaders(), timeout: 15000 }
       );
       const data = response.data;
+      const files: CommitFileChange[] = (data.files || []).map((f: any) => ({
+        path: f.filename,
+        status: f.status || 'modified',
+        additions: f.additions || 0,
+        deletions: f.deletions || 0,
+        previousPath: f.previous_filename,
+      }));
       return {
         commit: {
           sha: data.sha,
@@ -286,7 +332,8 @@ export class GitHubService {
           avatarUrl: data.author?.avatar_url,
           url: data.html_url,
         },
-        filesChanged: (data.files || []).map((f: any) => f.filename),
+        filesChanged: files.map((f) => f.path),
+        files,
       };
     } catch (err: any) {
       throw new Error(`Failed to fetch commit ${sha}: ${err.message}`);

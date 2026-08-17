@@ -23,6 +23,9 @@ import {
 } from "lucide-react";
 import axios from "axios";
 
+import { useAnalysisJob } from "@/hooks/useAnalysisJob";
+import AnalysisProgressBanner from "@/components/AnalysisProgressBanner";
+
 export type SecuritySeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO";
 export type SecurityConfidence = "CONFIRMED" | "HIGH_CONFIDENCE" | "POTENTIAL" | "INFO";
 export type SecurityFilter = "ALL" | "CONFIRMED" | "POTENTIAL" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW_INFO";
@@ -52,8 +55,6 @@ interface SecurityTabProps {
   repositoryId: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
-
 const FILTER_OPTIONS: Array<{ id: SecurityFilter; label: string }> = [
   { id: "ALL", label: "All Findings" },
   { id: "CONFIRMED", label: "Confirmed" },
@@ -65,28 +66,28 @@ const FILTER_OPTIONS: Array<{ id: SecurityFilter; label: string }> = [
 ];
 
 export default function SecurityTab({ repositoryId }: SecurityTabProps) {
-  const [findings, setFindings] = useState<SecurityFinding[]>([]);
-  const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<SecurityFilter>("ALL");
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const fetchSecurityScan = async (forceRescan = false) => {
-    setLoading(true);
-    try {
-      const response = await axios.post(`${API_BASE}/intelligence/${repositoryId}/security`, {
-        forceRescan,
-      });
-      setFindings(response.data);
-    } catch (err) {
-      console.error("Failed to run security scan:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    result,
+    status,
+    progress,
+    currentStage,
+    error,
+    isStaleCommit,
+    isInitialLoading,
+    isRunning,
+    triggerJob,
+    cancelJob,
+    retryJob,
+  } = useAnalysisJob<SecurityFinding[]>({
+    repositoryId,
+    type: "SECURITY_AUDIT",
+    autoRunIfNone: true,
+  });
 
-  useEffect(() => {
-    fetchSecurityScan(false);
-  }, [repositoryId]);
+  const findings: SecurityFinding[] = Array.isArray(result) ? result : [];
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -158,14 +159,26 @@ export default function SecurityTab({ repositoryId }: SecurityTabProps) {
         </div>
 
         <button
-          onClick={() => fetchSecurityScan(true)}
-          disabled={loading}
+          onClick={() => triggerJob(true)}
+          disabled={isRunning}
           className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? "animate-spin" : ""}`} />
           <span>Rescan Security</span>
         </button>
       </div>
+
+      {/* Background Analysis Progress & Stage Banner */}
+      <AnalysisProgressBanner
+        status={status}
+        progress={progress}
+        currentStage={currentStage}
+        error={error}
+        isStaleCommit={isStaleCommit}
+        onCancel={cancelJob}
+        onRetry={retryJob}
+        onRunLatest={() => triggerJob(true)}
+      />
 
       {/* Security Confidence & Severity Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -209,12 +222,7 @@ export default function SecurityTab({ repositoryId }: SecurityTabProps) {
       </div>
 
       {/* Findings List */}
-      {loading ? (
-        <div className="py-24 flex flex-col items-center justify-center text-center text-slate-500 gap-3">
-          <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-medium">Scanning codebase with hardened security heuristics & GLM-5.2...</span>
-        </div>
-      ) : filteredFindings.length > 0 ? (
+      {filteredFindings.length > 0 ? (
         <div className="space-y-4">
           {filteredFindings.map((finding) => (
             <div

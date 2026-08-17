@@ -3,6 +3,7 @@ import { EmbeddingService } from './embedding.service.js';
 import { VectorStore, SearchResult } from './chroma.service.js';
 import { OpenAIService } from './openai.service.js';
 import { LLMService, LLMProviderType } from './llm.service.js';
+import { TaskType } from '../ai/index.js';
 import prisma from '../config/prisma.js';
 
 export interface Citation {
@@ -227,7 +228,7 @@ export class RAGService {
   /**
    * Build the system prompt based on repository context and chat mode.
    */
-  private static buildSystemPrompt(
+  public static buildSystemPrompt(
     repo: any,
     mode: ChatMode,
     contextText: string,
@@ -408,6 +409,20 @@ ${contextText || 'No relevant code chunks were found for this query in the repos
     const systemPrompt = this.buildSystemPrompt(repo, mode, contextText, selectedFilePath);
     let fullAnswer = '';
 
+    const modeToTaskMap: Record<string, TaskType> = {
+      explain: 'coding',
+      refactor: 'coding',
+      generate_tests: 'testing',
+      architecture: 'architecture',
+      debug: 'debugging',
+      bugs: 'debugging',
+      security: 'security',
+      commits: 'chat',
+      repo: 'chat',
+      file: 'chat',
+    };
+    const taskType: TaskType = modeToTaskMap[mode] || 'chat';
+
     try {
       for await (const token of LLMService.streamChat({
         systemPrompt,
@@ -415,6 +430,7 @@ ${contextText || 'No relevant code chunks were found for this query in the repos
         conversationHistory: historyForContext,
         provider: activeProvider,
         rawContextText: contextText,
+        taskType,
       })) {
         fullAnswer += token;
         yield { type: 'token', data: { token } };
@@ -433,6 +449,7 @@ ${contextText || 'No relevant code chunks were found for this query in the repos
           chatSessionId: resolvedSessionId,
           role: 'ASSISTANT',
           content: fullAnswer,
+          status: 'COMPLETED',
           citations: JSON.stringify(citations),
         },
       });

@@ -14,8 +14,22 @@ import {
   Sparkles,
   RefreshCw,
   Tag,
+  ChevronDown,
+  ChevronRight,
+  FileText,
 } from "lucide-react";
 import axios from "axios";
+
+import { useAnalysisJob } from "@/hooks/useAnalysisJob";
+import AnalysisProgressBanner from "@/components/AnalysisProgressBanner";
+
+interface CommitFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  previousPath?: string;
+}
 
 interface CommitSummary {
   sha: string;
@@ -24,6 +38,9 @@ interface CommitSummary {
   date: string;
   avatarUrl?: string;
   url: string;
+  files?: CommitFile[];
+  additions?: number;
+  deletions?: number;
 }
 
 interface CommitAnalysisTabProps {
@@ -37,38 +54,34 @@ export default function CommitAnalysisTab({
   repositoryId,
   onAskAIAboutCommit,
 }: CommitAnalysisTabProps) {
-  const [data, setData] = useState<{
-    commits: CommitSummary[];
-    hotspots: Array<{ file: string; changes: number }>;
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string>("ALL");
+  const [expandedShas, setExpandedShas] = useState<Record<string, boolean>>({});
 
-  const fetchCommits = async () => {
-    setLoading(true);
-    try {
-      const response = await axios.get(`${API_BASE}/intelligence/${repositoryId}/commits`);
-      setData(response.data);
-    } catch (err) {
-      console.error("Failed to load commit analytics:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const toggleExpanded = (sha: string) =>
+    setExpandedShas((prev) => ({ ...prev, [sha]: !prev[sha] }));
 
-  useEffect(() => {
-    fetchCommits();
-  }, [repositoryId]);
+  const {
+    result,
+    status,
+    progress,
+    currentStage,
+    error,
+    isStaleCommit,
+    isRunning,
+    triggerJob,
+    cancelJob,
+    retryJob,
+  } = useAnalysisJob<{
+    commits: CommitSummary[];
+    hotspots: Array<{ file: string; changes: number }>;
+  }>({
+    repositoryId,
+    type: "COMMIT_ANALYSIS",
+    autoRunIfNone: true,
+  });
 
-  if (loading) {
-    return (
-      <div className="py-24 flex flex-col items-center justify-center text-center text-slate-500 gap-3 bg-white rounded-2xl border border-slate-200 shadow-sm">
-        <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm font-medium">Aggregating git commit log and calculating code hotspots...</span>
-      </div>
-    );
-  }
+  const data = result;
 
   const getCommitType = (msg: string) => {
     const lower = msg.toLowerCase();
@@ -114,13 +127,26 @@ export default function CommitAnalysisTab({
         </div>
 
         <button
-          onClick={fetchCommits}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer"
+          onClick={() => triggerJob(true)}
+          disabled={isRunning}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all shadow-xs shrink-0 cursor-pointer disabled:opacity-50"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? "animate-spin" : ""}`} />
           <span>Refresh Commits</span>
         </button>
       </div>
+
+      {/* Background Analysis Progress & Stage Banner */}
+      <AnalysisProgressBanner
+        status={status}
+        progress={progress}
+        currentStage={currentStage}
+        error={error}
+        isStaleCommit={isStaleCommit}
+        onCancel={cancelJob}
+        onRetry={retryJob}
+        onRunLatest={() => triggerJob(true)}
+      />
 
       {/* Code Churn Hotspots Section */}
       {data?.hotspots && data.hotspots.length > 0 && (
@@ -199,11 +225,14 @@ export default function CommitAnalysisTab({
           ) : (
             filteredCommits.map((commit, idx) => {
               const commitType = getCommitType(commit.message);
+              const files = commit.files || [];
+              const isExpanded = !!expandedShas[commit.sha];
               return (
                 <div
                   key={idx}
-                  className="p-4 rounded-xl bg-slate-50/70 hover:bg-[#E8F7F2]/20 border border-slate-200 hover:border-[#008F75] transition-all flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-2xs"
+                  className="rounded-xl bg-slate-50/70 border border-slate-200 hover:border-[#008F75] transition-all shadow-2xs"
                 >
+                  <div className="p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                   <div className="flex items-start gap-3">
                     <div className="p-2 rounded-xl bg-white border border-slate-200 text-slate-700 shrink-0 mt-0.5 shadow-2xs">
                       <GitCommit className="w-4 h-4 text-[#008F75]" />
@@ -219,7 +248,7 @@ export default function CommitAnalysisTab({
                         </h4>
                       </div>
 
-                      <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                      <div className="flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
                         <span className="flex items-center gap-1">
                           <User className="w-3 h-3 text-slate-400" />
                           <span className="font-medium text-slate-700">{commit.author}</span>
@@ -229,6 +258,28 @@ export default function CommitAnalysisTab({
                           <Calendar className="w-3 h-3 text-slate-400" />
                           <span>{new Date(commit.date).toLocaleDateString()}</span>
                         </span>
+                        {files.length > 0 && (
+                          <>
+                            <span>·</span>
+                            <button
+                              onClick={() => toggleExpanded(commit.sha)}
+                              className="flex items-center gap-1 font-semibold text-slate-700 hover:text-[#008F75] cursor-pointer"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="w-3 h-3" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3" />
+                              )}
+                              {files.length} file{files.length === 1 ? "" : "s"} changed
+                            </button>
+                            <span className="font-mono text-emerald-700 font-semibold">
+                              +{commit.additions ?? 0}
+                            </span>
+                            <span className="font-mono text-rose-700 font-semibold">
+                              -{commit.deletions ?? 0}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -250,6 +301,42 @@ export default function CommitAnalysisTab({
                       </a>
                     )}
                   </div>
+                  </div>
+
+                  {isExpanded && files.length > 0 && (
+                    <div className="border-t border-slate-200 px-4 py-3 space-y-1.5 bg-white/70 rounded-b-xl">
+                      {files.map((file) => (
+                        <div
+                          key={file.path}
+                          className="flex items-center justify-between gap-3 text-[11px]"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase border shrink-0 ${
+                                file.status === "added"
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                  : file.status === "removed"
+                                  ? "bg-rose-50 text-rose-800 border-rose-200"
+                                  : file.status === "renamed"
+                                  ? "bg-blue-50 text-blue-800 border-blue-200"
+                                  : "bg-slate-100 text-slate-700 border-slate-200"
+                              }`}
+                            >
+                              {file.status}
+                            </span>
+                            <FileText className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="font-mono text-slate-800 truncate">
+                              {file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono shrink-0">
+                            <span className="text-emerald-700 font-semibold">+{file.additions}</span>
+                            <span className="text-rose-700 font-semibold">-{file.deletions}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })

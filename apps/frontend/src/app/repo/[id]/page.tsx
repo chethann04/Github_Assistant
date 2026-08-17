@@ -24,6 +24,7 @@ import {
   X,
   Sparkles,
   ExternalLink,
+  Bot,
 } from "lucide-react";
 import axios from "axios";
 import ChatInterface from "@/components/ChatInterface";
@@ -39,7 +40,8 @@ import CommitAnalysisTab from "@/components/CommitAnalysisTab";
 import ImpactAnalysisTab from "@/components/ImpactAnalysisTab";
 import HealthScoreTab from "@/components/HealthScoreTab";
 import CitationDrawer, { CitationData } from "@/components/CitationDrawer";
-import { Lock, FlaskConical, GitCompare } from "lucide-react";
+import BackgroundTaskPanel from "@/components/BackgroundTaskPanel";
+import { Lock, FlaskConical, GitCompare, Layers, Clock } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
@@ -72,16 +74,50 @@ export default function RepoWorkspace() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [activeChatJob, setActiveChatJob] = useState<any>(null);
+  const [showTaskPanel, setShowTaskPanel] = useState(false);
+  const [activeAnalysisCount, setActiveAnalysisCount] = useState(0);
+
+  // Poll for background active chat & analysis jobs across the entire workspace
+  useEffect(() => {
+    if (!id) return;
+    const checkActiveJobs = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const [chatRes, analysisRes] = await Promise.all([
+          axios.get(`${API_BASE}/chat/active-jobs?repositoryId=${id}`, { withCredentials: true }),
+          axios.get(`${API_BASE}/analysis/jobs/active?repositoryId=${id}`, { withCredentials: true }),
+        ]);
+
+        if (chatRes.data && Array.isArray(chatRes.data) && chatRes.data.length > 0) {
+          setActiveChatJob(chatRes.data[0]);
+        } else {
+          setActiveChatJob(null);
+        }
+
+        if (analysisRes.data && Array.isArray(analysisRes.data)) {
+          setActiveAnalysisCount(analysisRes.data.length);
+        } else {
+          setActiveAnalysisCount(0);
+        }
+      } catch { /* silent */ }
+    };
+
+    checkActiveJobs();
+    const interval = setInterval(checkActiveJobs, 5000);
+    return () => clearInterval(interval);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     const fetchDetails = async () => {
       try {
-        const repoRes = await axios.get(`${API_BASE}/repos/${id}`);
+        const [repoRes, filesRes] = await Promise.all([
+          axios.get(`${API_BASE}/repos/${id}`, { withCredentials: true }),
+          axios.get(`${API_BASE}/repos/${id}/files`, { withCredentials: true }),
+        ]);
         setRepo(repoRes.data);
-
-        const filesRes = await axios.get(`${API_BASE}/repos/${id}/files`);
-        setFiles(filesRes.data);
+        setFiles(filesRes.data || []);
       } catch (err) {
         console.error("Failed to load repo data:", err);
       } finally {
@@ -392,7 +428,39 @@ export default function RepoWorkspace() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
+            {/* Global Background AI Chat Indicator */}
+            {activeChatJob && activeTab !== "chat" && (
+              <button
+                onClick={() => setActiveTab("chat")}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gradient-to-r from-emerald-500/10 via-indigo-500/10 to-purple-500/10 border border-emerald-300/80 text-xs font-semibold text-emerald-900 shadow-sm hover:shadow-md transition-all animate-pulse cursor-pointer"
+                title="AI is generating a response in the background. Click to view."
+              >
+                <Bot className="w-3.5 h-3.5 text-emerald-600 animate-spin shrink-0" />
+                <span className="truncate max-w-[180px] sm:max-w-[260px]">
+                  AI Generating: &quot;{activeChatJob.query}&quot;
+                </span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100/90 text-emerald-800 font-mono font-bold">
+                  View
+                </span>
+              </button>
+            )}
+
+            {/* Global Background Tasks Drawer Button */}
+            <button
+              onClick={() => setShowTaskPanel(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-slate-200 hover:border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-all shadow-2xs cursor-pointer"
+              title="Open Global Background Tasks"
+            >
+              <Clock className="w-3.5 h-3.5 text-slate-500" />
+              <span>Tasks</span>
+              {activeAnalysisCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold animate-pulse">
+                  {activeAnalysisCount}
+                </span>
+              )}
+            </button>
+
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" /> Indexed & Ready
             </span>
@@ -501,6 +569,14 @@ export default function RepoWorkspace() {
         commitSha={repo.latestCommit || repo.defaultBranch}
         onClose={() => setSelectedFileCitation(null)}
         onAskAi={handleAskAiAboutFile}
+      />
+
+      {/* Global Background Tasks Panel */}
+      <BackgroundTaskPanel
+        isOpen={showTaskPanel}
+        onClose={() => setShowTaskPanel(false)}
+        repositoryId={repo.id}
+        onSelectFeature={(tab) => setActiveTab(tab as TabType)}
       />
     </div>
   );

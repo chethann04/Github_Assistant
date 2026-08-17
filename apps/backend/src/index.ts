@@ -8,9 +8,12 @@ import reposRouter from './routes/repos.js';
 import indexingRouter from './routes/indexing.js';
 import chatRouter from './routes/chat.js';
 import intelligenceRouter from './routes/intelligence.js';
+import analysisRouter from './routes/analysis.js';
 import { rateLimiter } from './middleware/rateLimit.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { anonymousSessionMiddleware } from './middleware/anonymousSession.js';
+import { AnalysisQueueService } from './queues/analysis-queue.service.js';
+import { ChatQueueService } from './queues/chat-queue.service.js';
 
 // ============================================================================
 // SINGLE-INSTANCE BACKEND GUARD
@@ -36,6 +39,10 @@ lockServer.listen({ port: LOCK_PORT, host: '127.0.0.1', exclusive: true }, () =>
 });
 
 function initializeApplication() {
+  // Initialize background queue workers and clean up any stale jobs from server restart
+  AnalysisQueueService.initialize().catch((err) => console.warn('[Startup] AnalysisQueue init warning:', err.message));
+  ChatQueueService.initialize().catch((err) => console.warn('[Startup] ChatQueue init warning:', err.message));
+
   const app = express();
 
   // CORS with credentials for HttpOnly cookie session support
@@ -74,6 +81,7 @@ function initializeApplication() {
   app.use('/api/v1/indexing', anonymousSessionMiddleware, indexingRouter);
   app.use('/api/v1/chat', anonymousSessionMiddleware, chatRouter);
   app.use('/api/v1/intelligence', anonymousSessionMiddleware, intelligenceRouter);
+  app.use('/api/v1/analysis', anonymousSessionMiddleware, analysisRouter);
 
   app.get('/', (_req, res) => {
     res.json({ message: 'GitHub Knowledge Assistant API Server' });
