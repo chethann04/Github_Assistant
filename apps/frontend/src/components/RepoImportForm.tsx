@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Github, Search, AlertCircle, Sparkles, Loader2 } from "lucide-react";
+import { Github, Search, AlertCircle, Loader2 } from "lucide-react";
 import axios from "axios";
 
 interface RepoImportFormProps {
@@ -9,12 +9,6 @@ interface RepoImportFormProps {
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
-
-const SAMPLE_REPOS = [
-  { label: "expressjs/cors", url: "https://github.com/expressjs/cors" },
-  { label: "chethann04/Deadlock-Detection-", url: "https://github.com/chethann04/Deadlock-Detection-" },
-  { label: "pallets/flask", url: "https://github.com/pallets/flask" },
-];
 
 export default function RepoImportForm({ onJobStarted }: RepoImportFormProps) {
   const [url, setUrl] = useState("");
@@ -93,23 +87,6 @@ export default function RepoImportForm({ onJobStarted }: RepoImportFormProps) {
           </button>
         </div>
       </form>
-
-      {/* Quick-Try Sample Chips */}
-      <div className="flex flex-wrap items-center justify-center gap-2 mt-3.5 text-xs text-[#64748B]">
-        <span className="flex items-center gap-1.5 font-semibold text-[#008F75]">
-          <Sparkles className="w-3.5 h-3.5 text-[#008F75]" /> Try example:
-        </span>
-        {SAMPLE_REPOS.map((sample) => (
-          <button
-            key={sample.label}
-            type="button"
-            onClick={() => setUrl(sample.url)}
-            className="px-3 py-1.5 rounded-xl bg-white hover:bg-[#E8F7F2] text-[#334155] hover:text-[#008F75] border border-[#D9E5E1] hover:border-[#008F75] font-mono text-[11px] sm:text-xs font-medium transition-all shadow-2xs cursor-pointer active:scale-95"
-          >
-            {sample.label}
-          </button>
-        ))}
-      </div>
 
       {error && (
         <div className="mt-4 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-center gap-3 shadow-xs animate-in fade-in duration-200">
