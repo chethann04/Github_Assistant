@@ -1,12 +1,23 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 
-const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+const candidateDirs = [
+  process.cwd(),
+  path.resolve(process.cwd(), '..'),
+  path.resolve(process.cwd(), '../..'),
+  typeof __dirname !== 'undefined' ? __dirname : '',
+  typeof __dirname !== 'undefined' ? path.resolve(__dirname, '..') : '',
+  typeof __dirname !== 'undefined' ? path.resolve(__dirname, '../..') : '',
+  typeof __dirname !== 'undefined' ? path.resolve(__dirname, '../../..') : '',
+].filter(Boolean);
 
-dotenv.config({ path: path.resolve(currentDir, '../../../.env') });
-dotenv.config({ path: path.resolve(currentDir, '../../.env') });
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
-dotenv.config({ path: path.resolve(process.cwd(), 'apps/backend/.env') });
+for (const dir of candidateDirs) {
+  const envPath = path.join(dir, '.env');
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
 dotenv.config();
 
 const geminiKey = process.env.GEMINI_API_KEY || '';

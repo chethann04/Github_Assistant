@@ -96,13 +96,15 @@ export class GitHubService {
   private static metaCache = new Map<string, { meta: RepoInfo; expiresAt: number }>();
   private static readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
-  private static getHeaders() {
+  private static getHeaders(customAccept?: string) {
     const headers: Record<string, string> = {
-      'Accept': 'application/vnd.github.v3+json',
+      'Accept': customAccept || 'application/vnd.github.v3+json',
       'User-Agent': 'GitHub-Knowledge-Assistant/2.0',
     };
     if (config.githubToken) {
-      headers['Authorization'] = `token ${config.githubToken}`;
+      const token = config.githubToken.trim();
+      const authHeader = token.startsWith('github_pat_') ? `Bearer ${token}` : `token ${token}`;
+      headers['Authorization'] = authHeader;
     }
     return headers;
   }
@@ -243,6 +245,7 @@ export class GitHubService {
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${name}/${commitSha}/${filePath}`;
     try {
       const response = await axios.get(rawUrl, {
+        headers: this.getHeaders(),
         responseType: 'text',
         transformResponse: [(data) => data],
         timeout: 15000,
@@ -260,21 +263,41 @@ export class GitHubService {
     } catch (err: any) {
       if (err.message.includes('binary')) throw err;
 
-      // Fallback to GitHub API
+      // Fallback to GitHub API (direct raw media type first)
       try {
         const blobUrl = `https://api.github.com/repos/${owner}/${name}/contents/${filePath}?ref=${commitSha}`;
-        const res = await axios.get(blobUrl, { headers: this.getHeaders(), timeout: 10000 });
-        if (res.data?.content) {
-          const raw = Buffer.from(res.data.content, 'base64').toString('utf-8');
-          if (this.isBinaryContent(raw)) {
+        const rawRes = await axios.get(blobUrl, {
+          headers: this.getHeaders('application/vnd.github.v3.raw'),
+          responseType: 'text',
+          transformResponse: [(data) => data],
+          timeout: 15000,
+        });
+        if (rawRes.data) {
+          const content = typeof rawRes.data === 'string' ? rawRes.data : String(rawRes.data);
+          if (this.isBinaryContent(content)) {
             throw new Error(`File appears to be binary: ${filePath}`);
           }
-          const sanitized = sanitizeUnicodeText(raw, filePath);
+          const sanitized = sanitizeUnicodeText(content, filePath);
           this.contentCache.set(cacheKey, { content: sanitized, expiresAt: Date.now() + this.CACHE_TTL_MS });
           return sanitized;
         }
       } catch {
-        // ignore
+        // Fallback to JSON base64
+        try {
+          const blobUrl = `https://api.github.com/repos/${owner}/${name}/contents/${filePath}?ref=${commitSha}`;
+          const res = await axios.get(blobUrl, { headers: this.getHeaders(), timeout: 10000 });
+          if (res.data?.content) {
+            const raw = Buffer.from(res.data.content, 'base64').toString('utf-8');
+            if (this.isBinaryContent(raw)) {
+              throw new Error(`File appears to be binary: ${filePath}`);
+            }
+            const sanitized = sanitizeUnicodeText(raw, filePath);
+            this.contentCache.set(cacheKey, { content: sanitized, expiresAt: Date.now() + this.CACHE_TTL_MS });
+            return sanitized;
+          }
+        } catch {
+          // ignore
+        }
       }
       throw new Error(`Failed to fetch content for ${filePath}: ${err.message}`);
     }

@@ -124,7 +124,7 @@ export async function anonymousSessionMiddleware(
     res.cookie(SESSION_COOKIE_NAME, session.id, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: SESSION_MAX_AGE_MS,
       path: '/',
     });

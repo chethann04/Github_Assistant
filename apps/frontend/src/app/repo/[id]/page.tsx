@@ -197,7 +197,7 @@ export default function RepoWorkspace() {
 
   // Primary AI Analysis Navigation Group
   const aiAnalysisTabs: Array<{ id: TabType; label: string; icon: any }> = [
-    { id: "architecture", label: "Architecture", icon: Cpu },
+    { id: "architecture", label: "Architecture Synthesis", icon: Cpu },
     { id: "deps", label: "Dependency Graph", icon: GitBranch },
     { id: "docs", label: "Auto Docs", icon: FileText },
     { id: "bugs", label: "Code Review", icon: ShieldAlert },
@@ -468,7 +468,7 @@ export default function RepoWorkspace() {
         </header>
 
         {/* Workspace Tab View */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full max-w-[1650px] mx-auto">
+        <main key={activeTab} className="flex-1 p-4 sm:p-6 lg:p-8 w-full max-w-[1650px] mx-auto workspace-page-enter">
           {activeTab === "chat" && (
             <ChatInterface
               repositoryId={repo.id}

@@ -9,32 +9,33 @@ generator client {
 }
 
 model AnonymousSession {
-  id           String        @id @default(uuid())
-  createdAt    DateTime      @default(now())
-  lastSeenAt   DateTime      @updatedAt
-  repositories Repository[]
-  indexJobs    IndexJob[]
-  analysisJobs AnalysisJob[]
-  chatSessions ChatSession[]
-  chatJobs     ChatJob[]
+  id              String           @id @default(uuid())
+  createdAt       DateTime         @default(now())
+  lastSeenAt      DateTime         @updatedAt
+  repositories    Repository[]
+  indexJobs       IndexJob[]
+  analysisJobs    AnalysisJob[]
+  chatSessions    ChatSession[]
+  chatJobs        ChatJob[]
+  gitMapAnalyses  GitMapAnalysis[]
 }
 
 model Repository {
-  id            String           @id @default(uuid())
-  sessionId     String
-  session       AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  url           String
-  owner         String
-  name          String
-  description   String?
-  defaultBranch String           @default("main")
-  latestCommit  String?
-  language      String?
-  stars         Int              @default(0)
-  forks         Int              @default(0)
-  topics        String[]         @default([])
-  visibility    String           @default("public")
-  status        String           @default("PENDING")
+  id               String           @id @default(uuid())
+  sessionId        String
+  session          AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  url              String
+  owner            String
+  name             String
+  description      String?
+  defaultBranch    String           @default("main")
+  latestCommit     String?
+  language         String?
+  stars            Int              @default(0)
+  forks            Int              @default(0)
+  topics           String[]         @default([])
+  visibility       String           @default("public")
+  status           String           @default("PENDING")
   complexityScore  Int?
   complexityLevel  String?
   complexityData   Json?
@@ -45,6 +46,7 @@ model Repository {
   analysisJobs     AnalysisJob[]
   chatSessions     ChatSession[]
   chatJobs         ChatJob[]
+  gitMapAnalyses   GitMapAnalysis[]
 
   @@unique([sessionId, url])
   @@index([sessionId])
@@ -159,6 +161,50 @@ model AnalysisJob {
   @@index([repositoryId])
   @@index([repositoryId, type])
   @@index([repositoryId, type, commitSha])
+  @@index([status])
+}
+
+model GitMapAnalysis {
+  id               String           @id @default(uuid())
+  sessionId        String
+  session          AnonymousSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  repositoryId     String
+  repository       Repository       @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  commitSha        String?
+  status           String           @default("PENDING") // PENDING, ANALYZING, COMPLETED, FAILED
+  progress         Int              @default(0)
+  currentStage     String?
+  errorMessage     String?
+  
+  // High-level metrics & health
+  totalFiles       Int              @default(0)
+  totalModules     Int              @default(0)
+  totalLines       Int              @default(0)
+  healthScore      Int              @default(0)
+  healthBreakdown  Json?            // { structure, documentation, testing, dependencyHealth, ownershipDistribution }
+  technicalDebt    Json?            // { todosCount, largeFilesCount, unreferencedFilesCount, outdatedDepsCount, highRiskModulesCount }
+  
+  // Graph payloads (pre-computed deterministic & AI enriched)
+  modulesData      Json?            // list of modules with importance/risk/files
+  nodesData        Json?            // list of file nodes with metrics/tags
+  edgesData        Json?            // list of directed edges with types
+  dependenciesData Json?            // manifest packages & direct/transitive deps
+  gitActivityData  Json?            // hotspots, churn, recent changes
+  contributorsData Json?            // contributor distribution & bus-factor analysis
+  
+  // AI Enriched Summaries (Stage B)
+  overviewSummary  String?          // High level architecture overview
+  architectureFlow Json?            // Architecture layers & data flows
+  onboardingGuide  Json?            // "Start Here" reading guide for developers
+  
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([sessionId])
+  @@index([repositoryId])
+  @@index([repositoryId, commitSha])
   @@index([status])
 }
 

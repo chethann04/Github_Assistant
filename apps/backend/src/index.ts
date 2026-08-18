@@ -9,6 +9,7 @@ import indexingRouter from './routes/indexing.js';
 import chatRouter from './routes/chat.js';
 import intelligenceRouter from './routes/intelligence.js';
 import analysisRouter from './routes/analysis.js';
+import gitmapRouter from './routes/gitmap.js';
 import { rateLimiter } from './middleware/rateLimit.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { anonymousSessionMiddleware } from './middleware/anonymousSession.js';
@@ -74,7 +75,10 @@ function initializeApplication() {
   app.use(rateLimiter(120, 60)); // 120 requests per minute
 
   // Health router (does not require session)
+  app.use('/health', healthRouter);
+  app.use('/api/health', healthRouter);
   app.use('/api/v1', healthRouter);
+  app.use('/api/v1/health', healthRouter);
 
   // Anonymous Session Protection Middleware for all API endpoints
   app.use('/api/v1/repos', anonymousSessionMiddleware, reposRouter);
@@ -82,6 +86,7 @@ function initializeApplication() {
   app.use('/api/v1/chat', anonymousSessionMiddleware, chatRouter);
   app.use('/api/v1/intelligence', anonymousSessionMiddleware, intelligenceRouter);
   app.use('/api/v1/analysis', anonymousSessionMiddleware, analysisRouter);
+  app.use('/api/v1/gitmap', anonymousSessionMiddleware, gitmapRouter);
 
   app.get('/', (_req, res) => {
     res.json({ message: 'GitHub Knowledge Assistant API Server' });

@@ -3,7 +3,7 @@ import prisma from '../config/prisma.js';
 
 const router = Router();
 
-router.get('/health', async (_req: Request, res: Response) => {
+const handleHealth = async (_req: Request, res: Response) => {
   let dbStatus = 'disconnected';
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -20,6 +20,9 @@ router.get('/health', async (_req: Request, res: Response) => {
       database: dbStatus,
     },
   });
-});
+};
+
+router.get('/health', handleHealth);
+router.get('/', handleHealth);
 
 export default router;

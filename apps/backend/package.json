@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "prisma generate && tsc",
+    "build": "prisma generate && tsc && node -e \"const fs=require('fs'),path=require('path'),s=path.join('src','services','chroma_worker.py'),d=path.join('dist','services','chroma_worker.py');if(fs.existsSync(s)){fs.mkdirSync(path.dirname(d),{recursive:true});fs.copyFileSync(s,d);}\"",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
