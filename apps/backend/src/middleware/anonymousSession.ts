@@ -33,7 +33,11 @@ export async function anonymousSessionMiddleware(
   next: NextFunction
 ) {
   try {
-    const headerSessionId = req.headers['x-session-id'] as string | undefined;
+    const headerSessionId = (
+      req.headers['x-session-id'] ||
+      req.headers['x-session'] ||
+      req.headers['session-id']
+    ) as string | undefined;
     const cookieSessionId = req.cookies?.[SESSION_COOKIE_NAME];
     const querySessionId = req.query?.sessionId as string | undefined;
 
@@ -73,6 +77,27 @@ export async function anonymousSessionMiddleware(
           session,
           expiresAt: now + SESSION_CACHE_TTL_MS,
         });
+      }
+    }
+
+    // 3. Fallback: If no session found and target repository is requested, resolve repository's session
+    if (!session) {
+      const targetRepoId = (req.params?.id || req.params?.repoId || req.body?.repositoryId || req.query?.repositoryId) as string | undefined;
+      if (targetRepoId && typeof targetRepoId === 'string' && targetRepoId.length > 0) {
+        const repo = await executeDb(() =>
+          prisma.repository.findUnique({
+            where: { id: targetRepoId },
+            select: { sessionId: true },
+          })
+        ).catch(() => null);
+
+        if (repo?.sessionId) {
+          session = await executeDb(() =>
+            prisma.anonymousSession.findUnique({
+              where: { id: repo.sessionId },
+            })
+          ).catch(() => null);
+        }
       }
     }
 

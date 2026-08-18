@@ -88,6 +88,14 @@ function initializeApplication() {
   app.use('/api/v1/analysis', anonymousSessionMiddleware, analysisRouter);
   app.use('/api/v1/gitmap', anonymousSessionMiddleware, gitmapRouter);
 
+  // Direct route aliases (fallback for configurations omitting /api/v1 prefix)
+  app.use('/repos', anonymousSessionMiddleware, reposRouter);
+  app.use('/indexing', anonymousSessionMiddleware, indexingRouter);
+  app.use('/chat', anonymousSessionMiddleware, chatRouter);
+  app.use('/intelligence', anonymousSessionMiddleware, intelligenceRouter);
+  app.use('/analysis', anonymousSessionMiddleware, analysisRouter);
+  app.use('/gitmap', anonymousSessionMiddleware, gitmapRouter);
+
   app.get('/', (_req, res) => {
     res.json({ message: 'GitHub Knowledge Assistant API Server' });
   });

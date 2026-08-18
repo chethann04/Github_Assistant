@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+import { API_BASE, buildSseUrl } from "@/lib/api";
 
 export interface UseAnalysisJobOptions {
   repositoryId: string;
@@ -133,7 +133,7 @@ export function useAnalysisJob<T = any>({
       setJobId(targetJobId);
 
       try {
-        const es = new EventSource(`${API_BASE}/analysis/jobs/${targetJobId}/events`, {
+        const es = new EventSource(buildSseUrl(`${API_BASE}/analysis/jobs/${targetJobId}/events`), {
           withCredentials: true,
         });
         eventSourceRef.current = es;

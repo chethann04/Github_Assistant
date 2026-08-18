@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import CitationDrawer, { CitationData } from "./CitationDrawer";
+import { API_BASE, authFetch, buildSseUrl } from "@/lib/api";
 
 type ChatMode = "repo" | "file" | "debug" | "architecture" | "commits";
 export type AIModelProvider = "dual" | "gemini" | "openai";
@@ -36,8 +37,6 @@ interface ChatInterfaceProps {
   initialSelectedFile?: string;
   initialMode?: ChatMode;
 }
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
 export const getAiModelsList = (isNvidia: boolean = false, modelName: string = "") => {
   const modelShortName = modelName ? modelName.split("/").pop() || modelName : (isNvidia ? "GLM-5.2" : "GPT-4o");
@@ -216,7 +215,7 @@ export default function ChatInterface({
   useEffect(() => {
     const fetchProviders = async () => {
       try {
-        const res = await fetch(`${API_BASE}/chat/providers`, { credentials: "include" });
+        const res = await authFetch(`${API_BASE}/chat/providers`);
         if (res.ok) {
           const data = await res.json();
           setAvailableProviders(data);
@@ -247,8 +246,7 @@ export default function ChatInterface({
 
     const observeStream = async () => {
       try {
-        const response = await fetch(`${API_BASE}/chat/jobs/${jobId}/events`, {
-          credentials: "include",
+        const response = await authFetch(buildSseUrl(`${API_BASE}/chat/jobs/${jobId}/events`), {
           signal: abortController.signal,
         });
 
@@ -333,9 +331,7 @@ export default function ChatInterface({
   // Load existing session messages from DB and check active jobs
   const loadSession = useCallback(async (sessionId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
-        credentials: "include",
-      });
+      const res = await authFetch(`${API_BASE}/chat/sessions/${sessionId}`);
       if (!res.ok) return;
       const session = await res.json();
       setActiveSessionId(sessionId);
@@ -356,9 +352,7 @@ export default function ChatInterface({
       setShowSidebar(false);
 
       // Check if there is an active job for this session
-      const activeRes = await fetch(`${API_BASE}/chat/active-jobs?repositoryId=${repositoryId}`, {
-        credentials: "include",
-      });
+      const activeRes = await authFetch(`${API_BASE}/chat/active-jobs?repositoryId=${repositoryId}`);
       if (activeRes.ok) {
         const activeJobs = await activeRes.json();
         const sessionJob = activeJobs.find((j: any) => j.chatSessionId === sessionId);
@@ -374,9 +368,7 @@ export default function ChatInterface({
   // Load sessions on mount and restore last active conversation only on initial mount
   const loadSessions = useCallback(async (shouldRestoreLast = false) => {
     try {
-      const res = await fetch(`${API_BASE}/chat/${repositoryId}/sessions`, {
-        credentials: "include",
-      });
+      const res = await authFetch(`${API_BASE}/chat/${repositoryId}/sessions`);
       if (res.ok) {
         const data = await res.json();
         const sessionList = Array.isArray(data) ? data : [];
@@ -424,9 +416,8 @@ export default function ChatInterface({
   const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
+      await authFetch(`${API_BASE}/chat/sessions/${sessionId}`, {
         method: "DELETE",
-        credentials: "include",
       });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (activeSessionId === sessionId) startNewChat();
@@ -442,9 +433,8 @@ export default function ChatInterface({
   const submitRename = async (sessionId: string) => {
     if (!renameValue.trim()) return;
     try {
-      await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
+      await authFetch(`${API_BASE}/chat/sessions/${sessionId}`, {
         method: "PATCH",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: renameValue.trim() }),
       });
@@ -489,9 +479,8 @@ export default function ChatInterface({
 
     try {
       // POST to background ChatJob endpoint (returns in < 200ms)
-      const res = await fetch(`${API_BASE}/chat/jobs`, {
+      const res = await authFetch(`${API_BASE}/chat/jobs`, {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
