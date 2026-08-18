@@ -13,6 +13,9 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "GitHub Codebase AI Assistant — Understand Any Public GitHub Codebase with AI",
   description: "AI-powered developer platform to chat, query, document, and analyze public GitHub codebases with source-linked verification.",
+  icons: {
+    icon: "/icon.svg",
+  },
 };
 
 export default function RootLayout({
