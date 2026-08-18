@@ -34,21 +34,61 @@ const PREDEFINED_CONCEPTS = [
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
 
+function highlightMatches(text: string, searchQuery: string, isDark: boolean = true) {
+  if (!text || !searchQuery || !searchQuery.trim()) return text;
+
+  const trimmed = searchQuery.trim();
+  const rawTokens = trimmed
+    .split(/[\s,;+()\[\]{}'"]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+
+  const allTerms = Array.from(new Set([trimmed, ...rawTokens])).filter(Boolean);
+  allTerms.sort((a, b) => b.length - a.length);
+
+  if (allTerms.length === 0) return text;
+
+  const escapedTerms = allTerms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escapedTerms.join("|")})`, "gi");
+
+  const parts = text.split(regex);
+  if (parts.length === 1) return text;
+
+  const markClass = isDark
+    ? "bg-amber-400/30 text-amber-200 font-bold px-1 py-0.5 rounded shadow-2xs border border-amber-400/40"
+    : "bg-amber-200/90 text-amber-950 font-bold px-1 py-0.5 rounded shadow-2xs border border-amber-300";
+
+  return parts.map((part, index) => {
+    if (regex.test(part)) {
+      regex.lastIndex = 0;
+      return (
+        <mark key={index} className={markClass}>
+          {part}
+        </mark>
+      );
+    }
+    return part;
+  });
+}
+
 export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
   const [query, setQuery] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
   const [results, setResults] = useState<CitationData[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<CitationData | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   const executeSearch = async (searchTerm: string) => {
-    if (!searchTerm.trim()) return;
+    const clean = searchTerm.trim();
+    if (!clean) return;
 
+    setActiveQuery(clean);
     setLoading(true);
     try {
       const response = await axios.post(`${API_BASE}/chat/${repositoryId}/search`, {
-        query: searchTerm.trim(),
-        limit: 10,
+        query: clean,
+        limit: 15,
       });
       setResults(response.data || []);
     } catch (err) {
@@ -75,13 +115,13 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
       {/* Header */}
       <div className="pb-4 border-b border-slate-200">
         <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 w-fit">
-          <Compass className="w-3.5 h-3.5 text-emerald-600" /> Semantic Feature Locator
+          <Compass className="w-3.5 h-3.5 text-emerald-600" /> Semantic & Keyword Code Locator
         </span>
         <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mt-2">
-          Find Implementation & Code Locator
+          Code Search & Implementation Finder
         </h2>
         <p className="text-xs sm:text-sm text-slate-500 mt-1">
-          Search code semantically by concept, feature name, architectural responsibility, or logic flow.
+          Hybrid semantic and keyword search across all indexed repository functions, symbols, and files.
         </p>
       </div>
 
@@ -93,7 +133,7 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Describe any feature or concept (e.g. 'auth middleware', 'vector storage', 'health calculation')..."
+            placeholder="Search any keyword, symbol, function, or concept (e.g. 'handleOpenFile', 'auth', 'BankersAlgorithm')..."
             className="w-full bg-transparent px-3 py-2.5 text-slate-900 placeholder-slate-400 focus:outline-none text-xs sm:text-sm font-normal"
           />
           <button
@@ -105,7 +145,7 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <>
-                <span>Find Locations</span>
+                <span>Search Code</span>
                 <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
               </>
             )}
@@ -116,7 +156,7 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
       {/* Suggested Quick Concept Pills */}
       <div>
         <span className="text-[11px] font-semibold text-slate-500 block mb-2">
-          Quick Concept Searches:
+          Quick Searches:
         </span>
         <div className="flex flex-wrap gap-2">
           {PREDEFINED_CONCEPTS.map((concept, idx) => (
@@ -140,14 +180,14 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
         <div className="py-20 flex flex-col items-center justify-center text-center text-slate-500 gap-3">
           <div className="w-8 h-8 border-2 border-[#008F75] border-t-transparent rounded-full animate-spin" />
           <span className="text-sm font-medium">
-            Generating 2048D query embedding and searching ChromaDB collection...
+            Executing hybrid semantic & keyword vector search...
           </span>
         </div>
       ) : results.length > 0 ? (
         <div className="space-y-4 pt-2">
           <div className="flex items-center justify-between">
             <span className="text-xs text-slate-700 font-bold flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-[#008F75]" /> Ranked Implementation Locations ({results.length}):
+              <Sparkles className="w-3.5 h-3.5 text-[#008F75]" /> Matched Code Locations ({results.length}):
             </span>
             <span className="text-xs text-slate-400">Click any card to inspect code in drawer</span>
           </div>
@@ -160,17 +200,17 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
                 className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:border-[#008F75] hover:bg-[#E8F7F2]/30 transition-all cursor-pointer group shadow-2xs space-y-3"
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-lg bg-slate-900 text-white font-mono font-bold text-xs flex items-center justify-center">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <span className="w-6 h-6 rounded-lg bg-slate-900 text-white font-mono font-bold text-xs flex items-center justify-center shrink-0">
                       {idx + 1}
                     </span>
-                    <FileCode className="w-4 h-4 text-[#008F75]" />
-                    <span className="font-mono text-xs font-bold text-slate-900 group-hover:text-[#008F75] transition-colors">
-                      {item.filePath}
+                    <FileCode className="w-4 h-4 text-[#008F75] shrink-0" />
+                    <span className="font-mono text-xs font-bold text-slate-900 group-hover:text-[#008F75] transition-colors truncate">
+                      {highlightMatches(item.filePath, activeQuery, false)}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="text-xs px-2.5 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200 font-mono font-medium">
                       Lines {item.startLine}–{item.endLine}
                     </span>
@@ -203,20 +243,28 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
                       )}
                     </button>
                   </div>
-                  <pre className="p-3.5 overflow-x-auto whitespace-pre leading-relaxed text-slate-300 max-h-36">
-                    {item.snippet}
+                  <pre className="p-3.5 overflow-x-auto whitespace-pre leading-relaxed text-slate-300 max-h-36 font-mono text-xs">
+                    {highlightMatches(item.snippet, activeQuery, true)}
                   </pre>
                 </div>
               </div>
             ))}
           </div>
         </div>
+      ) : activeQuery ? (
+        <div className="text-center py-16 text-slate-500">
+          <Search className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+          <h4 className="text-slate-800 font-semibold text-sm">No code matches found for &quot;{activeQuery}&quot;</h4>
+          <p className="text-xs text-slate-500 mt-1">
+            Try searching for specific variable names, functions, route paths, or broader terms.
+          </p>
+        </div>
       ) : (
         <div className="text-center py-16 text-slate-500">
           <Search className="w-10 h-10 text-slate-300 mx-auto mb-2" />
           <h4 className="text-slate-800 font-semibold text-sm">Enter a search query or select a concept above</h4>
           <p className="text-xs text-slate-500 mt-1">
-            Matches are scored by semantic distance in the 2048-dimensional vector space.
+            Hybrid search combines exact keyword, symbol occurrences, and 2048-dimensional dense vector embeddings.
           </p>
         </div>
       )}
@@ -225,6 +273,7 @@ export default function CodeSearchTab({ repositoryId }: CodeSearchTabProps) {
       <CitationDrawer
         citation={selectedCitation}
         repositoryId={repositoryId}
+        searchQuery={activeQuery}
         onClose={() => setSelectedCitation(null)}
       />
     </div>

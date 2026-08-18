@@ -454,17 +454,19 @@ export class VectorStore {
   }
 
   /**
-   * Search vectors strictly scoped to repositoryId.
+   * Search vectors strictly scoped to repositoryId with hybrid vector + keyword matching.
    */
   public static async searchSimilar(
     queryVector: number[],
     repositoryId: string,
     limit: number = 8,
-    filePath?: string
+    filePath?: string,
+    queryText?: string
   ): Promise<SearchResult[]> {
     try {
       const res = await this.sendCommand<{ results: SearchResult[] }>('search', {
         query_vector: queryVector,
+        query_text: queryText || undefined,
         repository_id: repositoryId,
         limit,
         file_path: filePath || undefined,

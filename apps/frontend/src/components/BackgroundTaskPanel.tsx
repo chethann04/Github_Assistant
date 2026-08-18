@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   RefreshCw,
@@ -9,8 +10,6 @@ import {
   FileText,
   ShieldAlert,
   Lock,
-  FlaskConical,
-  GitCompare,
   GitPullRequest,
   Activity,
   Search,
@@ -59,8 +58,6 @@ export const FEATURE_TYPE_MAP: Record<
   DOCUMENTATION: { label: "Auto Docs", tab: "docs", icon: FileText, color: "text-amber-600 bg-amber-50 border-amber-200" },
   CODE_REVIEW: { label: "Code Review", tab: "bugs", icon: ShieldAlert, color: "text-rose-600 bg-rose-50 border-rose-200" },
   SECURITY_AUDIT: { label: "Security Audit", tab: "security", icon: Lock, color: "text-red-600 bg-red-50 border-red-200" },
-  TEST_GENERATOR: { label: "Test Generator", tab: "tests", icon: FlaskConical, color: "text-purple-600 bg-purple-50 border-purple-200" },
-  COMPARE_REPOS: { label: "Compare Repos", tab: "compare", icon: GitCompare, color: "text-cyan-600 bg-cyan-50 border-cyan-200" },
   IMPACT_ANALYSIS: { label: "Impact Analysis", tab: "impact", icon: GitPullRequest, color: "text-teal-600 bg-teal-50 border-teal-200" },
   HEALTH_SCORE: { label: "Health Score", tab: "health", icon: Activity, color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
   CODE_SEARCH: { label: "Code Search", tab: "search", icon: Search, color: "text-sky-600 bg-sky-50 border-sky-200" },
@@ -75,9 +72,26 @@ export default function BackgroundTaskPanel({
   repositoryId,
   onSelectFeature,
 }: BackgroundTaskPanelProps) {
+  const [mounted, setMounted] = useState(false);
   const [tasks, setTasks] = useState<BackgroundTaskItem[]>([]);
   const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "COMPLETED">("ALL");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
 
   const fetchTasks = async () => {
     try {
@@ -102,7 +116,7 @@ export default function BackgroundTaskPanel({
     return () => clearInterval(interval);
   }, [isOpen, repositoryId]);
 
-  if (!isOpen) return null;
+  if (!mounted || !isOpen) return null;
 
   const activeCount = tasks.filter((t) => t.status === "RUNNING" || t.status === "QUEUED").length;
 
@@ -132,9 +146,15 @@ export default function BackgroundTaskPanel({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
-      <div className="w-full max-w-md bg-white h-full shadow-2xl flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-200">
+  const panelContent = (
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-xs animate-in fade-in"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md bg-white h-full shadow-2xl flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-200"
+      >
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
           <div className="flex items-center gap-2">
@@ -307,4 +327,6 @@ export default function BackgroundTaskPanel({
       </div>
     </div>
   );
+
+  return createPortal(panelContent, document.body);
 }

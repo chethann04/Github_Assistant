@@ -95,7 +95,8 @@ export class RAGService {
     query: string,
     repositoryId: string,
     limit: number = config.topKResults,
-    selectedFilePath?: string
+    selectedFilePath?: string,
+    forceRepoSearch: boolean = false
   ): Promise<{
     citations: Citation[];
     contextText: string;
@@ -108,8 +109,9 @@ export class RAGService {
     const repo = await prisma.repository.findUnique({ where: { id: repositoryId } });
     const { category, categories, requiresRepoSearch } = this.classifyIntent(query);
 
-    if (!requiresRepoSearch) {
-      return { citations: [], contextText: '', repo, category, categories, requiresRepoSearch };
+    const shouldSearch = forceRepoSearch || requiresRepoSearch;
+    if (!shouldSearch) {
+      return { citations: [], contextText: '', repo, category, categories, requiresRepoSearch: false };
     }
 
     console.log(`[RAG] query="${query}"`);
@@ -118,22 +120,24 @@ export class RAGService {
     const citations: Citation[] = [];
     const seenKeys = new Set<string>();
 
-    // 1. ChromaDB vector search strictly filtered by repositoryId
+    // 1. ChromaDB hybrid vector + keyword search strictly filtered by repositoryId
     try {
-      const queryVector = await EmbeddingService.generateEmbedding(query, 'query');
-      console.log(`[RAG] queryVectorDimensions=${queryVector.length}`);
+      let queryVector: number[] = [];
+      try {
+        queryVector = await EmbeddingService.generateEmbedding(query, 'query');
+      } catch (embErr: any) {
+        console.warn(`[RAG] Embedding generation failed, falling back to pure keyword search: ${embErr.message}`);
+      }
 
       const matches: SearchResult[] = await VectorStore.searchSimilar(
         queryVector,
         repositoryId,
-        limit,
-        selectedFilePath
+        Math.max(limit * 2, 16),
+        selectedFilePath,
+        query
       );
 
       console.log(`[RAG] VectorStore matches=${matches.length}`);
-      for (const m of matches) {
-        console.log(`[RAG] match: score=${m.score.toFixed(4)} filePath=${m.payload.filePath} lines=${m.payload.startLine}-${m.payload.endLine}`);
-      }
 
       for (const m of matches) {
         // Enforce repository isolation
@@ -160,32 +164,56 @@ export class RAGService {
         repo,
         category,
         categories,
-        requiresRepoSearch,
+        requiresRepoSearch: shouldSearch,
         error: err.message,
       };
     }
 
-    // 2. Hybrid re-ranking: Keyword density + Filepath matching + Structure boost (Phase 15)
-    const queryKeywords = query
-      .toLowerCase()
+    // 2. Hybrid re-ranking: Exact phrase + Keyword density + Filepath matching + Symbol boost
+    const lowerQuery = query.toLowerCase().trim();
+    const queryKeywords = lowerQuery
       .replace(/[^a-z0-9_.-]/g, ' ')
       .split(/\s+/)
-      .filter((w) => w.length > 2);
+      .filter((w) => w.length >= 2);
 
     const reranked = citations
       .map((cit) => {
         let boost = 0;
         const lowerSnippet = cit.snippet.toLowerCase();
         const lowerPath = cit.filePath.toLowerCase();
+        const name = (cit.name || '').toLowerCase();
 
-        // Keyword density boost
-        for (const kw of queryKeywords) {
-          if (lowerSnippet.includes(kw)) boost += 0.04;
-          if (lowerPath.includes(kw)) boost += 0.08; // Filepath match boost
+        // Exact query phrase matching (highest relevance)
+        if (lowerSnippet.includes(lowerQuery)) {
+          boost += 0.30;
+        }
+        if (lowerPath.includes(lowerQuery)) {
+          boost += 0.35;
         }
 
         // Structural definition boost (named functions / classes)
-        if (cit.name) boost += 0.05;
+        if (name && (name.includes(lowerQuery) || lowerQuery.includes(name))) {
+          boost += 0.25;
+        } else if (cit.name) {
+          boost += 0.05;
+        }
+
+        // Keyword density boost
+        let matchedKeywords = 0;
+        for (const kw of queryKeywords) {
+          if (lowerSnippet.includes(kw)) {
+            boost += 0.05;
+            matchedKeywords++;
+          }
+          if (lowerPath.includes(kw)) {
+            boost += 0.08;
+            matchedKeywords++;
+          }
+        }
+
+        if (queryKeywords.length > 0 && matchedKeywords >= queryKeywords.length) {
+          boost += 0.15;
+        }
 
         return { ...cit, score: Math.round(Math.min(cit.score + boost, 1.0) * 100) / 100 };
       })
@@ -200,7 +228,7 @@ export class RAGService {
       )
       .join('\n\n');
 
-    return { citations: reranked, contextText, repo, category, categories, requiresRepoSearch };
+    return { citations: reranked, contextText, repo, category, categories, requiresRepoSearch: shouldSearch };
   }
 
   /**

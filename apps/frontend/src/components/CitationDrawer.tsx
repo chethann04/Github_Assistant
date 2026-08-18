@@ -13,6 +13,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import axios from "axios";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
@@ -33,8 +34,42 @@ interface CitationDrawerProps {
   repoOwner?: string;
   repoName?: string;
   commitSha?: string;
+  searchQuery?: string;
   onClose: () => void;
   onAskAi?: (filePath: string) => void;
+}
+
+function highlightSearchTerms(text: string, searchQuery?: string) {
+  if (!text || !searchQuery || !searchQuery.trim()) return text;
+
+  const trimmed = searchQuery.trim();
+  const rawTokens = trimmed
+    .split(/[\s,;+()\[\]{}'"]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+
+  const allTerms = Array.from(new Set([trimmed, ...rawTokens])).filter(Boolean);
+  allTerms.sort((a, b) => b.length - a.length);
+
+  if (allTerms.length === 0) return text;
+
+  const escapedTerms = allTerms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escapedTerms.join("|")})`, "gi");
+
+  const parts = text.split(regex);
+  if (parts.length === 1) return text;
+
+  return parts.map((part, index) => {
+    if (regex.test(part)) {
+      regex.lastIndex = 0;
+      return (
+        <mark key={index} className="bg-amber-200/90 text-amber-950 font-bold px-1 py-0.5 rounded shadow-2xs border border-amber-300">
+          {part}
+        </mark>
+      );
+    }
+    return part;
+  });
 }
 
 export default function CitationDrawer({
@@ -43,9 +78,11 @@ export default function CitationDrawer({
   repoOwner,
   repoName,
   commitSha,
+  searchQuery,
   onClose,
   onAskAi,
 }: CitationDrawerProps) {
+  const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showFullFile, setShowFullFile] = useState(false);
   const [fullContent, setFullContent] = useState<string | null>(null);
@@ -56,6 +93,23 @@ export default function CitationDrawer({
   const [explaining, setExplaining] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"code" | "explain">("code");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Keyboard shortcut (Escape to close)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    if (citation) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [citation, onClose]);
 
   // Reset states when citation changes
   useEffect(() => {
@@ -115,7 +169,7 @@ export default function CitationDrawer({
     }
   };
 
-  if (!citation) return null;
+  if (!mounted || !citation) return null;
 
   const displayedContent = showFullFile && fullContent ? fullContent : citation.snippet;
   const lines = displayedContent ? displayedContent.split("\n") : [];
@@ -135,9 +189,15 @@ export default function CitationDrawer({
       ? `https://github.com/${repoOwner}/${repoName}/blob/${commitSha || "main"}/${citation.filePath}#L${citation.startLine}-L${citation.endLine}`
       : null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-end bg-slate-900/40 backdrop-blur-xs transition-opacity animate-in fade-in">
-      <div className="relative w-full max-w-3xl h-full bg-white border-l border-slate-200 p-6 flex flex-col justify-between shadow-2xl overflow-hidden text-slate-900">
+  const drawerContent = (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-end bg-slate-900/40 backdrop-blur-xs transition-opacity animate-in fade-in"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-3xl h-full bg-white border-l border-slate-200 p-6 flex flex-col justify-between shadow-2xl overflow-hidden text-slate-900 animate-in slide-in-from-right duration-200"
+      >
         {/* Top Header */}
         <div>
           <div className="flex items-center justify-between pb-4 border-b border-slate-200">
@@ -165,6 +225,7 @@ export default function CitationDrawer({
               <button
                 onClick={onClose}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                title="Close drawer (Esc)"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -287,7 +348,7 @@ export default function CitationDrawer({
               </div>
               {/* Code text column */}
               <pre className="py-3 px-4 flex-1 overflow-x-auto text-slate-900 whitespace-pre font-mono text-xs leading-5">
-                {displayedContent}
+                {highlightSearchTerms(displayedContent, searchQuery)}
               </pre>
             </div>
           </div>
@@ -338,4 +399,6 @@ export default function CitationDrawer({
       </div>
     </div>
   );
+
+  return createPortal(drawerContent, document.body);
 }

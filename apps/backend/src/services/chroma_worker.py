@@ -92,14 +92,16 @@ def handle_command(cmd_data: dict) -> dict:
 
     elif cmd == "search":
         raw_vector = cmd_data.get("query_vector")
+        query_text = cmd_data.get("query_text", "")
         repository_id = cmd_data.get("repository_id")
         limit = int(cmd_data.get("limit", 8))
         file_path = cmd_data.get("file_path")
 
-        if not isinstance(raw_vector, list) or len(raw_vector) == 0:
-            return {"results": []}
+        has_vector = isinstance(raw_vector, list) and len(raw_vector) > 0
+        has_text = isinstance(query_text, str) and bool(query_text.strip())
 
-        query_vector = [float(x) for x in raw_vector]
+        if not has_vector and not has_text:
+            return {"results": []}
 
         coll = client.get_or_create_collection(
             name=collection_name,
@@ -119,43 +121,132 @@ def handle_command(cmd_data: dict) -> dict:
                 ]
             }
 
-        n_results = min(limit, total_count)
+        candidate_map = {}
 
-        try:
-            query_res = coll.query(
-                query_embeddings=[query_vector],
-                n_results=n_results,
-                where=where_clause,
-                include=["metadatas", "documents", "distances"]
-            )
-        except Exception as e:
-            return {"results": [], "warning": str(e)}
+        # 1. Dense Vector Search if vector is present
+        if has_vector:
+            query_vector = [float(x) for x in raw_vector]
+            n_results = min(limit * 3, total_count)
+            try:
+                query_res = coll.query(
+                    query_embeddings=[query_vector],
+                    n_results=n_results,
+                    where=where_clause,
+                    include=["metadatas", "documents", "distances"]
+                )
+                ids_list = query_res.get("ids", [[]])[0] if query_res.get("ids") else []
+                distances = query_res.get("distances", [[]])[0] if query_res.get("distances") else []
+                metadatas = query_res.get("metadatas", [[]])[0] if query_res.get("metadatas") else []
+                documents = query_res.get("documents", [[]])[0] if query_res.get("documents") else []
 
+                for i in range(len(ids_list)):
+                    dist = distances[i] if i < len(distances) else 0.0
+                    meta = metadatas[i] if i < len(metadatas) else {}
+                    doc = documents[i] if i < len(documents) else ""
+                    sim_score = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
+
+                    payload = dict(meta) if meta else {}
+                    payload["content"] = doc
+
+                    cid = str(ids_list[i])
+                    candidate_map[cid] = {
+                        "id": cid,
+                        "vector_score": float(sim_score),
+                        "payload": payload
+                    }
+            except Exception as e:
+                pass
+
+        # 2. Exact Keyword & Substring Search across Documents in ChromaDB
+        if has_text:
+            cleaned_query = query_text.strip()
+            terms_to_try = [cleaned_query]
+            words = [w.strip() for w in cleaned_query.replace("-", " ").replace("_", " ").split() if len(w.strip()) >= 2]
+            for w in words[:6]:
+                if w not in terms_to_try:
+                    terms_to_try.append(w)
+
+            for term in terms_to_try:
+                try:
+                    kw_res = coll.get(
+                        where=where_clause,
+                        where_document={"$contains": term},
+                        limit=limit * 3,
+                        include=["metadatas", "documents"]
+                    )
+                    kw_ids = kw_res.get("ids", [])
+                    kw_docs = kw_res.get("documents", [])
+                    kw_metas = kw_res.get("metadatas", [])
+
+                    for ki in range(len(kw_ids)):
+                        cid = str(kw_ids[ki])
+                        if cid not in candidate_map:
+                            meta = kw_metas[ki] if (kw_metas and ki < len(kw_metas)) else {}
+                            doc = kw_docs[ki] if (kw_docs and ki < len(kw_docs)) else ""
+                            payload = dict(meta) if meta else {}
+                            payload["content"] = doc
+                            candidate_map[cid] = {
+                                "id": cid,
+                                "vector_score": 0.50,
+                                "payload": payload
+                            }
+                except Exception:
+                    pass
+
+        # 3. Hybrid Re-scoring: exact keyword occurrence, token frequency, and symbol matches
         results = []
-        ids_list = query_res.get("ids", [[]])[0] if query_res.get("ids") else []
-        distances = query_res.get("distances", [[]])[0] if query_res.get("distances") else []
-        metadatas = query_res.get("metadatas", [[]])[0] if query_res.get("metadatas") else []
-        documents = query_res.get("documents", [[]])[0] if query_res.get("documents") else []
+        lower_query = query_text.lower().strip() if has_text else ""
+        query_tokens = [t for t in lower_query.split() if len(t) >= 2] if lower_query else []
 
-        for i in range(len(ids_list)):
-            dist = distances[i] if i < len(distances) else 0.0
-            meta = metadatas[i] if i < len(metadatas) else {}
-            doc = documents[i] if i < len(documents) else ""
+        for cid, item in candidate_map.items():
+            base_score = item["vector_score"]
+            payload = item["payload"]
+            content = payload.get("content", "")
+            lower_content = content.lower()
+            lower_file = str(payload.get("filePath", "")).lower()
+            name = str(payload.get("name", "")).lower()
 
-            similarity_score = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
+            keyword_boost = 0.0
 
-            payload = dict(meta) if meta else {}
-            payload["content"] = doc
+            if lower_query:
+                # Exact phrase match in content
+                if lower_query in lower_content:
+                    keyword_boost += 0.35
+                    base_score = max(base_score, 0.85)
 
+                # Exact phrase match in file path
+                if lower_query in lower_file:
+                    keyword_boost += 0.40
+                    base_score = max(base_score, 0.90)
+
+                # Symbol / function name match
+                if name and lower_query in name:
+                    keyword_boost += 0.30
+                    base_score = max(base_score, 0.88)
+
+                # Token occurrences
+                matched_tokens = 0
+                for token in query_tokens:
+                    if token in lower_content:
+                        matched_tokens += 1
+                        keyword_boost += 0.06
+                    if token in lower_file:
+                        matched_tokens += 1
+                        keyword_boost += 0.10
+
+                if query_tokens and matched_tokens == len(query_tokens):
+                    keyword_boost += 0.15
+
+            final_score = min(1.0, base_score + keyword_boost)
             results.append({
-                "id": str(ids_list[i]),
-                "score": float(similarity_score),
+                "id": cid,
+                "score": float(round(final_score, 4)),
                 "payload": payload
             })
 
-        # Sort descending by similarity score
+        # Sort descending by final score
         results.sort(key=lambda x: x["score"], reverse=True)
-        return {"results": results}
+        return {"results": results[:limit]}
 
     elif cmd == "count":
         repository_id = cmd_data.get("repository_id")

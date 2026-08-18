@@ -466,7 +466,7 @@ router.post('/:repoId/search', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Repository not found' });
     }
 
-    const { citations, error } = await RAGService.retrieveContext(query, repo.id, limit);
+    const { citations, error } = await RAGService.retrieveContext(query, repo.id, limit, undefined, true);
     if (error) {
       return res.status(500).json({ error });
     }
