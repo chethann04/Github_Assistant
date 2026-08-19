@@ -37,7 +37,7 @@ export class LLMService {
     const hasOpenAI = normalized.some((p) => p.id === 'openai' || p.id === 'nvidia' || p.id === 'openrouter');
     const hasGemini = normalized.some((p) => p.id === 'gemini');
 
-    const activeDefault: LLMProviderType = (config.llmProvider as LLMProviderType) || 'nvidia';
+    const activeDefault: LLMProviderType = (config.llmProvider as LLMProviderType) || 'openrouter';
 
     return {
       gemini: hasGemini,
@@ -64,7 +64,7 @@ export class LLMService {
       systemPrompt,
       userMessage,
       conversationHistory = [],
-      provider = (config.llmProvider as LLMProviderType) || 'nvidia',
+      provider = (config.llmProvider as LLMProviderType) || 'openrouter',
       rawContextText = '',
       onEvent,
     } = options;
@@ -94,8 +94,9 @@ export class LLMService {
     return await ProviderRouter.generate({
       systemPrompt,
       userMessage,
-      preferredProvider: preferredProvider || (config.llmProvider as LLMProviderType) || 'nvidia',
+      preferredProvider: preferredProvider || (config.llmProvider as LLMProviderType) || 'openrouter',
       maxTokens,
     });
   }
+
 }

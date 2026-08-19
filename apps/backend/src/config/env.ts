@@ -65,6 +65,15 @@ if (isOpenRouter) {
 const rawEmbeddingDims = parseInt(process.env.EMBEDDING_DIMENSIONS || '2048', 10);
 const embeddingDimensions = isNaN(rawEmbeddingDims) || rawEmbeddingDims <= 0 ? 2048 : rawEmbeddingDims;
 
+const rawNvidiaCooldown = parseInt(process.env.NVIDIA_COOLDOWN_MS || '60000', 10);
+const nvidiaCooldownMs = isNaN(rawNvidiaCooldown) || rawNvidiaCooldown < 0 ? 60000 : rawNvidiaCooldown;
+
+const rawOpenRouterCooldown = parseInt(process.env.OPENROUTER_COOLDOWN_MS || '60000', 10);
+const openrouterCooldownMs = isNaN(rawOpenRouterCooldown) || rawOpenRouterCooldown < 0 ? 60000 : rawOpenRouterCooldown;
+
+const rawGeminiCooldown = parseInt(process.env.GEMINI_COOLDOWN_MS || '60000', 10);
+const geminiCooldownMs = isNaN(rawGeminiCooldown) || rawGeminiCooldown < 0 ? 60000 : rawGeminiCooldown;
+
 export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
   databaseUrl: process.env.DATABASE_URL || '',
@@ -75,13 +84,16 @@ export const config = {
   glmModel,
   geminiApiKey: geminiKey,
   geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  geminiCooldownMs,
   openaiApiKey: resolvedApiKey,
   openaiModel: glmModel,
   openaiBaseUrl: resolvedBaseUrl,
   nvidiaApiKey: process.env.NVIDIA_API_KEY || '',
   nvidiaBaseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+  nvidiaCooldownMs,
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   openrouterBaseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+  openrouterCooldownMs,
   isNvidiaProvider: isNvidia,
   isOpenRouterProvider: isOpenRouter,
   chatModel: process.env.GEMINI_MODEL || process.env.CHAT_MODEL || 'gemini-2.5-flash',

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { resolveProviderName, classifyProviderError } from '../ai/provider-config.js';
+import { ProviderHealthManager } from '../ai/provider-health.js';
 
 export interface OpenAILLMError {
   code: 'LLM_TEMPORARILY_UNAVAILABLE' | 'LLM_RATE_LIMITED' | 'LLM_TIMEOUT' | 'LLM_ERROR';
@@ -46,7 +47,7 @@ export class OpenAIService {
   }
 
   private static candidateModels = config.isNvidiaProvider || config.isOpenRouterProvider
-    ? Array.from(new Set([config.openaiModel, 'z-ai/glm-5.2']))
+    ? [config.openaiModel]
     : [config.openaiModel, 'gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'];
 
   /**
@@ -72,14 +73,28 @@ export class OpenAIService {
       isTransient: classification.isRecoverable,
       status: classification.status,
       code: classification.type,
-      isRateLimit: classification.type === 'RATE_LIMIT',
+      isRateLimit: classification.type === 'RATE_LIMIT' || classification.status === 429,
     };
   }
 
   /**
    * Extract Retry-After header and compute bounded retry delay.
+   * HTTP 429, 401, 403, 400 are NOT retried immediately.
    */
   private static getRetryDelay(err: any, attempt: number, maxDelayMs: number = 3000): { delayMs: number; canRetry: boolean } {
+    const classification = classifyProviderError(err);
+    if (classification.type === 'RATE_LIMIT' || classification.status === 429) {
+      return { delayMs: 0, canRetry: false };
+    }
+    if (
+      classification.type === 'AUTH_ERROR' ||
+      classification.type === 'PERMISSION_DENIED' ||
+      classification.type === 'INVALID_REQUEST' ||
+      classification.type === 'INSUFFICIENT_CREDITS'
+    ) {
+      return { delayMs: 0, canRetry: false };
+    }
+
     const retryHeader =
       err?.headers?.['retry-after'] ||
       err?.response?.headers?.get?.('retry-after') ||
@@ -261,8 +276,20 @@ export class OpenAIService {
           }
         } catch (err: any) {
           lastError = err;
-          const { isTransient, status } = this.isTransientError(err);
+          const { isTransient, status, isRateLimit } = this.isTransientError(err);
           const { delayMs, canRetry } = this.getRetryDelay(err, attempt);
+
+          if (isRateLimit || status === 429) {
+            if (providerName.toLowerCase().includes('openrouter')) {
+              ProviderHealthManager.markProviderUnavailable('openrouter', '429 RATE_LIMIT', 429);
+            } else if (providerName.toLowerCase().includes('nvidia')) {
+              ProviderHealthManager.markProviderUnavailable('nvidia', '429 RATE_LIMIT', 429);
+            }
+          } else if (status === 402) {
+            if (providerName.toLowerCase().includes('openrouter')) {
+              ProviderHealthManager.markProviderUnavailable('openrouter', '402 INSUFFICIENT_CREDITS', 402);
+            }
+          }
 
           console.log(`[AI] Error attempt=${attempt} model=${modelName} status=${status || 'error'} msg="${err?.message?.substring(0, 120)}" retrying=${isTransient && attempt < maxRetries && canRetry}`);
 
@@ -365,8 +392,20 @@ export class OpenAIService {
           if (fullContent.trim().length > 0) return fullContent;
         } catch (err: any) {
           lastError = err;
-          const { isTransient, status } = this.isTransientError(err);
+          const { isTransient, status, isRateLimit } = this.isTransientError(err);
           const { delayMs, canRetry } = this.getRetryDelay(err, attempt);
+
+          if (isRateLimit || status === 429) {
+            if (providerName.toLowerCase().includes('openrouter')) {
+              ProviderHealthManager.markProviderUnavailable('openrouter', '429 RATE_LIMIT', 429);
+            } else if (providerName.toLowerCase().includes('nvidia')) {
+              ProviderHealthManager.markProviderUnavailable('nvidia', '429 RATE_LIMIT', 429);
+            }
+          } else if (status === 402) {
+            if (providerName.toLowerCase().includes('openrouter')) {
+              ProviderHealthManager.markProviderUnavailable('openrouter', '402 INSUFFICIENT_CREDITS', 402);
+            }
+          }
 
           console.log(`[AI] Error attempt=${attempt} model=${modelName} status=${status || 'error'} msg="${err?.message?.substring(0, 120)}" retrying=${isTransient && attempt < maxRetries && canRetry}`);
 

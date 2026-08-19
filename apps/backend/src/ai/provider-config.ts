@@ -34,7 +34,7 @@ export interface ClassifiedError {
  * Providers with valid API keys are sorted by priority / LLM_PROVIDER_ORDER.
  */
 export function getNormalizedProviders(): NormalizedProviderConfig[] {
-  const providerOrderRaw = process.env.LLM_PROVIDER_ORDER || 'nvidia,openrouter,openai,gemini';
+  const providerOrderRaw = process.env.LLM_PROVIDER_ORDER || 'openrouter,nvidia,gemini,openai';
   const orderList = providerOrderRaw
     .split(',')
     .map((s) => s.trim().toLowerCase())
@@ -46,34 +46,22 @@ export function getNormalizedProviders(): NormalizedProviderConfig[] {
 
   const providers: NormalizedProviderConfig[] = [
     {
-      id: 'nvidia',
-      name: 'NVIDIA NIM',
-      model: glmModel,
-      baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
-      apiKey: process.env.NVIDIA_API_KEY || (process.env.OPENAI_BASE_URL?.includes('nvidia') ? process.env.OPENAI_API_KEY : '') || '',
-      priority: preferredProvider === 'nvidia' ? 1 : 10,
-      enabled: false,
-      adapter: 'openai_compatible',
-    },
-    {
       id: 'openrouter',
       name: 'OpenRouter',
       model: process.env.OPENROUTER_MODEL || glmModel,
       baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       apiKey: process.env.OPENROUTER_API_KEY || (process.env.OPENAI_BASE_URL?.includes('openrouter') ? process.env.OPENAI_API_KEY : '') || '',
-      priority: preferredProvider === 'openrouter' ? 1 : 20,
+      priority: preferredProvider === 'openrouter' ? 1 : 10,
       enabled: false,
       adapter: 'openai_compatible',
     },
     {
-      id: 'openai',
-      name: 'OpenAI',
-      model: process.env.OPENAI_MODEL && !process.env.OPENAI_MODEL.includes('glm') ? process.env.OPENAI_MODEL : 'gpt-4o-mini',
-      baseUrl: process.env.OPENAI_BASE_URL && !process.env.OPENAI_BASE_URL.includes('nvidia') && !process.env.OPENAI_BASE_URL.includes('openrouter')
-        ? process.env.OPENAI_BASE_URL
-        : 'https://api.openai.com/v1',
-      apiKey: process.env.OPENAI_BASE_URL?.includes('api.openai.com') ? (process.env.OPENAI_API_KEY || '') : '',
-      priority: preferredProvider === 'openai' ? 1 : 30,
+      id: 'nvidia',
+      name: 'NVIDIA NIM',
+      model: glmModel,
+      baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+      apiKey: process.env.NVIDIA_API_KEY || (process.env.OPENAI_BASE_URL?.includes('nvidia') ? process.env.OPENAI_API_KEY : '') || '',
+      priority: preferredProvider === 'nvidia' ? 1 : 20,
       enabled: false,
       adapter: 'openai_compatible',
     },
@@ -83,9 +71,21 @@ export function getNormalizedProviders(): NormalizedProviderConfig[] {
       model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
       baseUrl: 'https://generativelanguage.googleapis.com',
       apiKey: process.env.GEMINI_API_KEY || '',
-      priority: preferredProvider === 'gemini' ? 1 : 40,
+      priority: preferredProvider === 'gemini' ? 1 : 30,
       enabled: false,
       adapter: 'gemini',
+    },
+    {
+      id: 'openai',
+      name: 'OpenAI',
+      model: process.env.OPENAI_MODEL && !process.env.OPENAI_MODEL.includes('glm') ? process.env.OPENAI_MODEL : 'gpt-4o-mini',
+      baseUrl: process.env.OPENAI_BASE_URL && !process.env.OPENAI_BASE_URL.includes('nvidia') && !process.env.OPENAI_BASE_URL.includes('openrouter')
+        ? process.env.OPENAI_BASE_URL
+        : 'https://api.openai.com/v1',
+      apiKey: process.env.OPENAI_API_KEY || '',
+      priority: preferredProvider === 'openai' ? 1 : 40,
+      enabled: false,
+      adapter: 'openai_compatible',
     },
   ];
 

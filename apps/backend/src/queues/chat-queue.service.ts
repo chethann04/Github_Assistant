@@ -217,7 +217,7 @@ export class ChatQueueService {
 
       // 5. Stream / Generate LLM Response
       let fullAnswer = '';
-      const activeProvider = provider || (config.llmProvider as LLMProviderType) || 'nvidia';
+      const activeProvider = provider || (config.llmProvider as LLMProviderType) || 'openrouter';
 
       try {
         for await (const token of LLMService.streamChat({

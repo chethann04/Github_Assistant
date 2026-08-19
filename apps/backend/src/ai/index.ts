@@ -7,3 +7,6 @@ export * from './complexity-router.js';
 export * from './response-evaluator.js';
 export * from './multi-model-orchestrator.js';
 export * from './ai-orchestrator.service.js';
+export * from './provider-health.js';
+export * from './provider-config.js';
+export * from './provider-router.js';
