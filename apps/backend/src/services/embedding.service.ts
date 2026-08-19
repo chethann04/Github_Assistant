@@ -139,6 +139,7 @@ export class EmbeddingService {
 
         // Store in cache
         memoryCache.set(cacheKey, embeddingValues);
+        console.log(`[EmbeddingService] Generated embedding model=${config.embeddingModel} dimensions=${embeddingValues.length}`);
         return embeddingValues;
       } catch (err: any) {
         if (err.message?.includes('Embedding dimension mismatch')) {

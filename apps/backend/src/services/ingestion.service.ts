@@ -85,9 +85,11 @@ export async function executeIngestion(
     }
 
     // ─── Step 1: CLONING / FETCHING TREE ────────────────────────────────────
+    console.log(`[RAG] Ingestion started repositoryId=${repositoryId} repo=${owner}/${name}`);
     await updateJobStep(jobId, 'CLONING', 10, 'Fetching repository file tree', { startedAt: new Date() });
 
     const files = await GitHubService.fetchRepoFileTree(owner, name, commitSha);
+    console.log(`[RAG] filesDiscovered=${files.length}`);
     console.log(`${label} discovered ${files.length} files`);
 
     if (files.length === 0) {
@@ -155,6 +157,9 @@ export async function executeIngestion(
       return;
     }
 
+    console.log(`[RAG] filesProcessed=${processableFiles.length}`);
+    console.log(`[RAG] filesSkipped=${fileErrors.length}`);
+    console.log(`[RAG] chunksCreated=${allChunks.length}`);
     console.log(`[IngestionService] Files: ${processableFiles.length}`);
     console.log(`[IngestionService] Chunks: ${allChunks.length}`);
 
@@ -222,16 +227,25 @@ export async function executeIngestion(
       );
     }
 
+    console.log(`[RAG] embeddingsGenerated=${embeddedCount}`);
+    console.log(`[RAG] embeddingDimension=${config.embeddingDimensions}`);
+
     // ─── Step 5: VERIFY PERSISTENCE & COMPLETE ──────────────────────────────
     const storedCount = await VectorStore.countChunks(repositoryId);
+    console.log(`[RAG] vectorsInserted=${storedCount}`);
     console.log(`[IngestionService] Verification: ${storedCount} points confirmed in ChromaDB for repository ${repositoryId}`);
 
     if (storedCount === 0 && allChunks.length > 0 && !config.enableInMemoryFallback) {
       throw new Error(`Verification failed: No vectors found in ChromaDB after upsert for repository ${repositoryId}.`);
     }
 
+    console.log(
+      `[RAG] Ingestion completed repositoryId=${repositoryId} files=${processableFiles.length} chunks=${allChunks.length} embeddings=${embeddedCount} vectorsInserted=${storedCount}`
+    );
+
     const durationMs = Date.now() - startTime;
     console.log(`[IngestionService] Indexing completed successfully in ${Math.round(durationMs / 1000)}s — ${allChunks.length} chunks indexed`);
+
 
     await prisma.indexJob.update({
       where: { id: jobId },

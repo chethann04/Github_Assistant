@@ -94,13 +94,21 @@ def handle_command(cmd_data: dict) -> dict:
         raw_vector = cmd_data.get("query_vector")
         query_text = cmd_data.get("query_text", "")
         repository_id = cmd_data.get("repository_id")
+        repository_ids = cmd_data.get("repository_ids")
+        include_docs = cmd_data.get("include_docs", False)
         limit = int(cmd_data.get("limit", 8))
         file_path = cmd_data.get("file_path")
+
+        repo_ids = []
+        if isinstance(repository_ids, list) and len(repository_ids) > 0:
+            repo_ids = [str(r).strip() for r in repository_ids if str(r).strip()]
+        elif repository_id:
+            repo_ids = [str(repository_id).strip()]
 
         has_vector = isinstance(raw_vector, list) and len(raw_vector) > 0
         has_text = isinstance(query_text, str) and bool(query_text.strip())
 
-        if not has_vector and not has_text:
+        if not has_vector and not has_text and not include_docs:
             return {"results": []}
 
         coll = client.get_or_create_collection(
@@ -112,26 +120,36 @@ def handle_command(cmd_data: dict) -> dict:
         if total_count == 0:
             return {"results": []}
 
-        where_clause = {"repositoryId": repository_id}
+        # Build where clause
+        if not repo_ids:
+            where_clause = {}
+        elif len(repo_ids) == 1:
+            where_clause = {"repositoryId": repo_ids[0]}
+        else:
+            where_clause = {"repositoryId": {"$in": repo_ids}}
+
         if file_path:
-            where_clause = {
-                "$and": [
-                    {"repositoryId": repository_id},
-                    {"filePath": file_path}
-                ]
-            }
+            if where_clause:
+                where_clause = {
+                    "$and": [
+                        where_clause,
+                        {"filePath": file_path}
+                    ]
+                }
+            else:
+                where_clause = {"filePath": file_path}
 
         candidate_map = {}
 
         # 1. Dense Vector Search if vector is present
         if has_vector:
             query_vector = [float(x) for x in raw_vector]
-            n_results = min(limit * 3, total_count)
+            n_results = min(max(limit * 4, 30), total_count)
             try:
                 query_res = coll.query(
                     query_embeddings=[query_vector],
                     n_results=n_results,
-                    where=where_clause,
+                    where=where_clause if where_clause else None,
                     include=["metadatas", "documents", "distances"]
                 )
                 ids_list = query_res.get("ids", [[]])[0] if query_res.get("ids") else []
@@ -143,6 +161,7 @@ def handle_command(cmd_data: dict) -> dict:
                     dist = distances[i] if i < len(distances) else 0.0
                     meta = metadatas[i] if i < len(metadatas) else {}
                     doc = documents[i] if i < len(documents) else ""
+                    # Cosine distance to similarity: 1 - (dist / 2)
                     sim_score = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
 
                     payload = dict(meta) if meta else {}
@@ -169,7 +188,7 @@ def handle_command(cmd_data: dict) -> dict:
             for term in terms_to_try:
                 try:
                     kw_res = coll.get(
-                        where=where_clause,
+                        where=where_clause if where_clause else None,
                         where_document={"$contains": term},
                         limit=limit * 3,
                         include=["metadatas", "documents"]
@@ -193,7 +212,35 @@ def handle_command(cmd_data: dict) -> dict:
                 except Exception:
                     pass
 
-        # 3. Hybrid Re-scoring: exact keyword occurrence, token frequency, and symbol matches
+        # 3. Always include project documentation (README, package.json, docs) for overview/motivation queries
+        if include_docs or (has_text and any(k in query_text.lower() for k in ["brief", "overview", "motivation", "about", "what is", "purpose", "explain project", "explain repo"])):
+            try:
+                doc_res = coll.get(
+                    where=where_clause if where_clause else None,
+                    limit=30,
+                    include=["metadatas", "documents"]
+                )
+                doc_ids = doc_res.get("ids", [])
+                doc_metas = doc_res.get("metadatas", [])
+                doc_docs = doc_res.get("documents", [])
+
+                for di in range(len(doc_ids)):
+                    dmeta = doc_metas[di] if (doc_metas and di < len(doc_metas)) else {}
+                    fpath = str(dmeta.get("filePath", "")).lower()
+                    if "readme" in fpath or "package.json" in fpath or fpath.startswith("docs/") or "architecture" in fpath:
+                        cid = str(doc_ids[di])
+                        if cid not in candidate_map:
+                            dpayload = dict(dmeta) if dmeta else {}
+                            dpayload["content"] = doc_docs[di] if (doc_docs and di < len(doc_docs)) else ""
+                            candidate_map[cid] = {
+                                "id": cid,
+                                "vector_score": 0.75 if "readme" in fpath else 0.65,
+                                "payload": dpayload
+                            }
+            except Exception:
+                pass
+
+        # 4. Hybrid Re-scoring: exact keyword occurrence, token frequency, and symbol matches
         results = []
         lower_query = query_text.lower().strip() if has_text else ""
         query_tokens = [t for t in lower_query.split() if len(t) >= 2] if lower_query else []
@@ -207,6 +254,12 @@ def handle_command(cmd_data: dict) -> dict:
             name = str(payload.get("name", "")).lower()
 
             keyword_boost = 0.0
+
+            # Boost README and documentation files for broad queries
+            if "readme" in lower_file:
+                keyword_boost += 0.20
+            elif "package.json" in lower_file or lower_file.startswith("docs/"):
+                keyword_boost += 0.10
 
             if lower_query:
                 # Exact phrase match in content
@@ -250,14 +303,72 @@ def handle_command(cmd_data: dict) -> dict:
 
     elif cmd == "count":
         repository_id = cmd_data.get("repository_id")
+        repository_ids = cmd_data.get("repository_ids")
         coll = client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"}
         )
-        if repository_id:
-            res = coll.get(where={"repositoryId": repository_id})
+        repo_ids = []
+        if isinstance(repository_ids, list) and len(repository_ids) > 0:
+            repo_ids = [str(r).strip() for r in repository_ids if str(r).strip()]
+        elif repository_id:
+            repo_ids = [str(repository_id).strip()]
+
+        if not repo_ids:
+            return {"count": coll.count()}
+        elif len(repo_ids) == 1:
+            res = coll.get(where={"repositoryId": repo_ids[0]})
             return {"count": len(res.get("ids", []))}
         else:
+            res = coll.get(where={"repositoryId": {"$in": repo_ids}})
+            return {"count": len(res.get("ids", []))}
+
+    elif cmd == "get_docs":
+        repository_id = cmd_data.get("repository_id")
+        repository_ids = cmd_data.get("repository_ids")
+        limit = int(cmd_data.get("limit", 10))
+
+        coll = client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+
+        repo_ids = []
+        if isinstance(repository_ids, list) and len(repository_ids) > 0:
+            repo_ids = [str(r).strip() for r in repository_ids if str(r).strip()]
+        elif repository_id:
+            repo_ids = [str(repository_id).strip()]
+
+        if not repo_ids:
+            where_clause = {}
+        elif len(repo_ids) == 1:
+            where_clause = {"repositoryId": repo_ids[0]}
+        else:
+            where_clause = {"repositoryId": {"$in": repo_ids}}
+
+        try:
+            res = coll.get(where=where_clause if where_clause else None, limit=100, include=["metadatas", "documents"])
+            ids_list = res.get("ids", [])
+            metas = res.get("metadatas", [])
+            docs = res.get("documents", [])
+
+            doc_results = []
+            for i in range(len(ids_list)):
+                meta = metas[i] if (metas and i < len(metas)) else {}
+                fpath = str(meta.get("filePath", "")).lower()
+                if "readme" in fpath or "package.json" in fpath or fpath.startswith("docs/") or "architecture" in fpath:
+                    payload = dict(meta) if meta else {}
+                    payload["content"] = docs[i] if (docs and i < len(docs)) else ""
+                    doc_results.append({
+                        "id": ids_list[i],
+                        "score": 0.95 if "readme" in fpath else 0.85,
+                        "payload": payload
+                    })
+
+            return {"results": doc_results[:limit]}
+        except Exception as e:
+            return {"results": [], "error": str(e)}
+
             return {"count": coll.count()}
 
     elif cmd == "delete_repo":

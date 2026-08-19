@@ -454,20 +454,24 @@ export class VectorStore {
   }
 
   /**
-   * Search vectors strictly scoped to repositoryId with hybrid vector + keyword matching.
+   * Search vectors strictly scoped to repositoryId (or repositoryIds array) with hybrid vector + keyword matching.
    */
   public static async searchSimilar(
     queryVector: number[],
-    repositoryId: string,
+    repositoryId: string | string[],
     limit: number = 8,
     filePath?: string,
-    queryText?: string
+    queryText?: string,
+    includeDocs: boolean = false
   ): Promise<SearchResult[]> {
+    const repoIds = Array.isArray(repositoryId) ? repositoryId : [repositoryId];
     try {
       const res = await this.sendCommand<{ results: SearchResult[] }>('search', {
         query_vector: queryVector,
         query_text: queryText || undefined,
-        repository_id: repositoryId,
+        repository_ids: repoIds,
+        repository_id: repoIds[0],
+        include_docs: includeDocs,
         limit,
         file_path: filePath || undefined,
       });
@@ -476,26 +480,49 @@ export class VectorStore {
     } catch (err: any) {
       if (config.enableInMemoryFallback) {
         console.warn(`[VectorStore] Search failed: ${err.message}. Using in-memory fallback.`);
-        return this.localSearch(queryVector, repositoryId, limit, filePath);
+        return this.localSearch(queryVector, repoIds[0], limit, filePath);
       }
       throw new Error(`[ChromaDB] Vector search failed: ${err.message}`);
     }
   }
 
   /**
-   * Count total chunks indexed for a repository.
+   * Retrieve high-priority documentation chunks (README.md, package.json, docs/*) for repository.
    */
-  public static async countChunks(repositoryId: string): Promise<number> {
+  public static async getDocumentationChunks(
+    repositoryId: string | string[],
+    limit: number = 8
+  ): Promise<SearchResult[]> {
+    const repoIds = Array.isArray(repositoryId) ? repositoryId : [repositoryId];
+    try {
+      const res = await this.sendCommand<{ results: SearchResult[] }>('get_docs', {
+        repository_ids: repoIds,
+        repository_id: repoIds[0],
+        limit,
+      });
+      return res.results || [];
+    } catch (err: any) {
+      console.warn(`[VectorStore] getDocumentationChunks failed: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Count total chunks indexed for a repository (or set of sibling repository IDs).
+   */
+  public static async countChunks(repositoryId: string | string[]): Promise<number> {
+    const repoIds = Array.isArray(repositoryId) ? repositoryId : [repositoryId];
     try {
       const res = await this.sendCommand<{ count: number }>('count', {
-        repository_id: repositoryId,
+        repository_ids: repoIds,
+        repository_id: repoIds[0],
       });
       return res.count || 0;
     } catch {
       if (config.enableInMemoryFallback) {
         let count = 0;
         for (const [, item] of this.localPoints.entries()) {
-          if (item.payload.repositoryId === repositoryId) count++;
+          if (repoIds.includes(item.payload.repositoryId)) count++;
         }
         return count;
       }
